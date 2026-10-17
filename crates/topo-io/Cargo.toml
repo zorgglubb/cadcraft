@@ -1,0 +1,12 @@
+[package]
+name = "cadcraft-topo-io"
+description = "CADCraft topography file import: total-station carnets (Leica GSI-8/16) and the coordinate-system registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }

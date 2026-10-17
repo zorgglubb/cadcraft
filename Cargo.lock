@@ -635,6 +635,7 @@ dependencies = [
  "cadcraft-io",
  "cadcraft-render",
  "cadcraft-topo-calc",
+ "cadcraft-topo-io",
  "log",
  "rstar",
  "serde",
@@ -710,6 +711,13 @@ dependencies = [
  "cadcraft-geom",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadcraft-topo-io"
+version = "0.7.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
