@@ -40,8 +40,10 @@ mod table;
 mod terrain;
 mod tolerance;
 mod topo;
+mod topo_labels;
 mod topo_listing;
 mod topo_points;
+mod topo_symbols;
 mod trimextend;
 mod utility;
 mod view;
@@ -209,6 +211,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo::specs());
         v.extend(topo_points::specs());
         v.extend(topo_listing::specs());
+        v.extend(topo_symbols::specs());
+        v.extend(topo_labels::specs());
         v.extend(terrain::specs());
         v
     })
