@@ -634,6 +634,7 @@ dependencies = [
  "cadcraft-geom",
  "cadcraft-io",
  "cadcraft-render",
+ "cadcraft-terrain",
  "cadcraft-topo-calc",
  "cadcraft-topo-io",
  "log",
@@ -702,6 +703,14 @@ dependencies = [
  "rayon",
  "serde_json",
  "tiny-skia",
+]
+
+[[package]]
+name = "cadcraft-terrain"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-geom",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
