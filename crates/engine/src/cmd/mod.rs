@@ -44,6 +44,7 @@ mod topo;
 mod topo_labels;
 mod topo_listing;
 mod topo_points;
+mod topo_split;
 mod topo_symbols;
 mod trimextend;
 mod utility;
@@ -215,6 +216,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo_symbols::specs());
         v.extend(topo_labels::specs());
         v.extend(foncier::specs());
+        v.extend(topo_split::specs());
         v.extend(terrain::specs());
         v
     })

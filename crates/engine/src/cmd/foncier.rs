@@ -54,7 +54,7 @@ const EDGE_TOL: f64 = 1e-6;
 
 /// `h`'s boundary as a closed, straight-sided polygon (bulges refused rather than flattened),
 /// oriented counter-clockwise so edge directions are comparable across parcels.
-fn straight_polygon(cmd: &str, s: &Session, h: Handle) -> Result<Vec<Vec2>> {
+pub(crate) fn straight_polygon(cmd: &str, s: &Session, h: Handle) -> Result<Vec<Vec2>> {
     let e = s.doc()?.entity(h).ok_or_else(|| bad(cmd, format!("no such object: {}", h.hex())))?;
     let EntityKind::LwPolyline(p) = &e.kind else { return Err(bad(cmd, format!("{}: not a closed polyline", h.hex()))) };
     if !p.closed {
