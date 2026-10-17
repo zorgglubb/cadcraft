@@ -38,6 +38,7 @@ mod settings;
 mod spline_opts;
 mod table;
 mod tolerance;
+mod topo;
 mod trimextend;
 mod utility;
 mod view;
@@ -202,6 +203,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(topo::specs());
         v
     })
 }

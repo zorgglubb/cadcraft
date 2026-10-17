@@ -634,6 +634,7 @@ dependencies = [
  "cadcraft-geom",
  "cadcraft-io",
  "cadcraft-render",
+ "cadcraft-topo-calc",
  "log",
  "rstar",
  "serde",
