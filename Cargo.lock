@@ -718,6 +718,7 @@ name = "cadcraft-topo-io"
 version = "0.7.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
