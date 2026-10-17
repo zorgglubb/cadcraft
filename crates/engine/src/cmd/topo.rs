@@ -24,8 +24,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["vo"])
             .params("{station: [x,y,z], references: [{point: [x,y,z], hzReading: gon}]}"),
         CommandSpec::new("topo.import_gsi", "Import GSI Carnet", run_import_gsi).menu(&["Topo", "Import", "GSI Carnet"]).params(
-            "{path: string, station: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
-                 label?: bool, textHeight?: number}",
+            "{path: string, station?: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
+                 label?: bool, textHeight?: number} - station/vo (or references) are required only if the \
+                 carnet has angle+distance shots with no ready-made coordinates; a coordinate-only carnet \
+                 (WI 81/82/83) imports with neither",
         ),
         CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)", run_import_points)
             .menu(&["Topo", "Import", "Points CSV/TXT"])
@@ -129,41 +131,57 @@ fn run_radiation(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "vo": vo_gon, "sigma": sigma, "points": points }))
 }
 
-/// Imports a Leica GSI-8/16 carnet from disk and inserts every point it can compute a full
-/// radiation observation for (Hz, Vz and slope distance all present) into the active document.
-/// Points missing one of those (a references-only coordinate line, for instance) are counted in
-/// `skippedPoints` rather than silently dropped.
+/// Imports a Leica GSI-8/16 carnet from disk. Two kinds of line insert directly, no station
+/// needed: a line already carrying X/Y/Z (WI 81/82/83 or the GeoMax station words 84/85/86) goes
+/// straight in as a coordinate; a line with a full radiation shot (Hz, Vz and slope distance all
+/// present) is turned into a coordinate via `station`/`vo` - required only when at least one
+/// such line exists, so a pure coordinate carnet (the common case for building a point geobase)
+/// never has to supply a station it doesn't have. A line with neither (say, a references-only
+/// angle with no distance) is counted in `skippedPoints` rather than silently dropped.
 fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("topo.import_gsi", "`path` is required"))?;
-    let station = vec3_req("topo.import_gsi", p, "station")?;
-    let (vo_gon, sigma) = resolve_vo("topo.import_gsi", station, p)?;
     let label = bool_or(p, "label", true);
     let text_height = f64_or(p, "textHeight", s.doc()?.header.f64("TEXTSIZE", 0.2));
 
     let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_gsi", format!("{path}: {e}")))?;
     let import = gsi::parse(&text);
 
+    let needs_radiation = import.points.iter().any(|gp| gp.x.is_none() && gp.hz_gon.is_some() && gp.vz_gon.is_some() && gp.slope_distance.is_some());
+    let station_vo = if needs_radiation {
+        let station = vec3_req("topo.import_gsi", p, "station")?;
+        let (vo_gon, sigma) = resolve_vo("topo.import_gsi", station, p)?;
+        Some((station, vo_gon, sigma))
+    } else {
+        None
+    };
+
     let mut points = Vec::new();
     let mut skipped_points = 0usize;
     for gp in &import.points {
-        let (Some(hz), Some(vz), Some(dist)) = (gp.hz_gon, gp.vz_gon, gp.slope_distance) else {
-            skipped_points += 1;
-            continue;
-        };
-        let obs = RadiationObservation {
-            hz_reading_gon: hz,
-            zenith_gon: vz,
-            slope_distance: dist,
-            instrument_height: gp.instrument_height.unwrap_or(0.0),
-            target_height: gp.target_height.unwrap_or(0.0),
-        };
-        let coord = radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.import_gsi", e))?;
         let code = gp.code.clone().or_else(|| Some(gp.id.clone()));
+        let coord = match (gp.x, gp.y) {
+            (Some(x), Some(y)) => Vec3::new(x, y, gp.z.unwrap_or(0.0)),
+            _ => {
+                let (Some((station, vo_gon, _)), Some(hz), Some(vz), Some(dist)) = (station_vo, gp.hz_gon, gp.vz_gon, gp.slope_distance) else {
+                    skipped_points += 1;
+                    continue;
+                };
+                let obs = RadiationObservation {
+                    hz_reading_gon: hz,
+                    zenith_gon: vz,
+                    slope_distance: dist,
+                    instrument_height: gp.instrument_height.unwrap_or(0.0),
+                    target_height: gp.target_height.unwrap_or(0.0),
+                };
+                radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.import_gsi", e))?
+            }
+        };
         points.push(insert_point(s, coord, code, label, text_height)?);
     }
 
     Ok(json!({
-        "vo": vo_gon, "sigma": sigma,
+        "vo": station_vo.map(|(_, vo, _)| vo),
+        "sigma": station_vo.and_then(|(_, _, sigma)| sigma),
         "importedPoints": points.len(),
         "skippedPoints": skipped_points,
         "skippedLines": import.skipped_lines,
@@ -268,8 +286,8 @@ mod tests {
     #[test]
     fn import_gsi_reads_a_real_carnet_and_inserts_points() {
         let mut s = session_with_doc();
-        // One station-coordinate line (skipped: no Hz/Vz/dist) and one real radiation shot
-        // (Hz 100 gon = due east, Vz 100 gon = horizontal, slope dist 50 m), code P1.
+        // One ready-made coordinate line (inserted directly, no station needed) and one real
+        // radiation shot (Hz 100 gon = due east, Vz 100 gon = horizontal, slope dist 50 m), P1.
         let gsi = "110001+0000STA1 81..00+00100000000 82..00+00100000000 83..00+00000010000\n\
                    110001+0000P001 21.324+10000000 22.324+10000000 31..00+00500000 41..00+0000P1\n";
         let path = std::env::temp_dir().join(format!("cadcraft-topo-test-{}.gsi", std::process::id()));
@@ -286,12 +304,49 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let out = out.expect("import should succeed");
 
-        assert_eq!(out["importedPoints"].as_u64(), Some(1));
-        assert_eq!(out["skippedPoints"].as_u64(), Some(1));
+        assert_eq!(out["importedPoints"].as_u64(), Some(2));
+        assert_eq!(out["skippedPoints"].as_u64(), Some(0));
         let pts = out["points"].as_array().expect("points array");
-        assert!((pts[0]["x"].as_f64().unwrap_or(f64::NAN) - 1050.0).abs() < 1e-6);
-        assert!((pts[0]["y"].as_f64().unwrap_or(f64::NAN) - 1000.0).abs() < 1e-6);
-        assert_eq!(pts[0]["code"].as_str(), Some("P1"));
+        // STA1's own coordinate (digits 00100000000 / 1000 = 100000.0), untouched by station/vo.
+        assert!((pts[0]["x"].as_f64().unwrap_or(f64::NAN) - 100000.0).abs() < 1e-6, "{pts:?}");
+        assert!((pts[1]["x"].as_f64().unwrap_or(f64::NAN) - 1050.0).abs() < 1e-6);
+        assert!((pts[1]["y"].as_f64().unwrap_or(f64::NAN) - 1000.0).abs() < 1e-6);
+        assert_eq!(pts[1]["code"].as_str(), Some("P1"));
+    }
+
+    #[test]
+    fn import_gsi_coordinate_only_carnet_needs_no_station() {
+        let mut s = session_with_doc();
+        // X=200.0 → digits 00000200000 (÷1000), same encoding `cadcraft_topo_io::gsi` tests use.
+        let gsi = "110001+0000P001 81..00+00000200000 82..00+00000300000 83..00+00000050000 41..00+0000A\n\
+                   110001+0000P002 81..00+00000210000 82..00+00000310000 83..00+00000051000 41..00+0000B\n";
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-coords-test-{}.gsi", std::process::id()));
+        std::fs::write(&path, gsi).expect("writing the temp carnet should succeed");
+
+        // No `station`/`vo` at all: a pure coordinate carnet must not need them.
+        let out = s.execute("topo.import_gsi", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("a coordinate-only carnet should import without a station");
+
+        assert_eq!(out["importedPoints"].as_u64(), Some(2));
+        assert_eq!(out["skippedPoints"].as_u64(), Some(0));
+        assert!(out["vo"].is_null());
+        let pts = out["points"].as_array().expect("points array");
+        assert!((pts[0]["x"].as_f64().unwrap_or(f64::NAN) - 200.0).abs() < 1e-6, "{pts:?}");
+        assert!((pts[0]["y"].as_f64().unwrap_or(f64::NAN) - 300.0).abs() < 1e-6);
+        assert_eq!(pts[0]["code"].as_str(), Some("A"));
+    }
+
+    #[test]
+    fn import_gsi_without_station_still_requires_it_for_angle_shots() {
+        let mut s = session_with_doc();
+        let gsi = "110001+0000P001 21.324+10000000 22.324+10000000 31..00+00500000 41..00+0000P1\n";
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-noangle-test-{}.gsi", std::process::id()));
+        std::fs::write(&path, gsi).expect("writing the temp carnet should succeed");
+
+        let out = s.execute("topo.import_gsi", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        assert!(out.is_err(), "an angle+distance shot with no station/vo must be refused, not silently skipped");
     }
 
     #[test]
