@@ -6,7 +6,7 @@
 use cadcraft_doc::{EntityKind, HAlign, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
 use cadcraft_topo_calc::{RadiationObservation, ReferenceObservation, radiation, zero_value};
-use cadcraft_topo_io::gsi;
+use cadcraft_topo_io::{csv_points, gsi};
 use serde_json::{Value, json};
 
 use super::draw::make_text;
@@ -27,6 +27,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "{path: string, station: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
                  label?: bool, textHeight?: number}",
         ),
+        CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)", run_import_points)
+            .menu(&["Topo", "Import", "Points CSV/TXT"])
+            .params("{path: string, label?: bool, textHeight?: number}"),
     ]
 }
 
@@ -73,7 +76,7 @@ fn resolve_vo(cmd: &str, station: Vec3, p: &Value) -> Result<(f64, Option<f64>)>
 
 /// Inserts one computed point as a POINT entity, with an optional TEXT label carrying its code,
 /// and returns the JSON summary used in every command's `points` array.
-fn insert_radiation_point(s: &mut Session, coord: Vec3, code: Option<String>, label: bool, text_height: f64) -> Result<Value> {
+fn insert_point(s: &mut Session, coord: Vec3, code: Option<String>, label: bool, text_height: f64) -> Result<Value> {
     let handle = s.add_entity(EntityKind::Point(Point { p: coord, angle: 0.0 }))?;
     let label_handle = match (&code, label) {
         (Some(c), true) if !c.is_empty() => {
@@ -120,7 +123,7 @@ fn run_radiation(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let coord = radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.radiation", e))?;
         let code = str_param(o, "code").map(str::to_string);
-        points.push(insert_radiation_point(s, coord, code, label, text_height)?);
+        points.push(insert_point(s, coord, code, label, text_height)?);
     }
 
     Ok(json!({ "vo": vo_gon, "sigma": sigma, "points": points }))
@@ -156,13 +159,38 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let coord = radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.import_gsi", e))?;
         let code = gp.code.clone().or_else(|| Some(gp.id.clone()));
-        points.push(insert_radiation_point(s, coord, code, label, text_height)?);
+        points.push(insert_point(s, coord, code, label, text_height)?);
     }
 
     Ok(json!({
         "vo": vo_gon, "sigma": sigma,
         "importedPoints": points.len(),
         "skippedPoints": skipped_points,
+        "skippedLines": import.skipped_lines,
+        "points": points,
+    }))
+}
+
+/// Imports a plain CSV/TXT point list (already-computed coordinates: `ID, X, Y, Z[, code]`, with
+/// or without a header, `;`/`,`/tab/space delimited) and inserts each point as-is into the
+/// active document - no station or polar calculation involved, unlike [`run_import_gsi`].
+fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("topo.import_points", "`path` is required"))?;
+    let label = bool_or(p, "label", true);
+    let text_height = f64_or(p, "textHeight", s.doc()?.header.f64("TEXTSIZE", 0.2));
+
+    let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_points", format!("{path}: {e}")))?;
+    let import = csv_points::parse(&text);
+
+    let mut points = Vec::with_capacity(import.points.len());
+    for cp in &import.points {
+        let coord = Vec3::new(cp.x, cp.y, cp.z.unwrap_or(0.0));
+        let code = cp.code.clone().or_else(|| Some(cp.id.clone()));
+        points.push(insert_point(s, coord, code, label, text_height)?);
+    }
+
+    Ok(json!({
+        "importedPoints": points.len(),
         "skippedLines": import.skipped_lines,
         "points": points,
     }))
@@ -278,6 +306,24 @@ mod tests {
             }),
         );
         assert!(out.is_err(), "a missing file should be refused, not panic");
+    }
+
+    #[test]
+    fn import_points_reads_a_csv_file_and_inserts_points() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-points-test-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z\nP1;100.0;200.0;10.0\nP2;not-a-number;200.0;10.0\nP3;110.0;210.0;11.0\n")
+            .expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+
+        assert_eq!(out["importedPoints"].as_u64(), Some(2));
+        assert_eq!(out["skippedLines"].as_u64(), Some(1));
+        let pts = out["points"].as_array().expect("points array");
+        assert_eq!(pts[0]["code"].as_str(), Some("P1"));
+        assert!((pts[1]["x"].as_f64().unwrap_or(f64::NAN) - 110.0).abs() < 1e-6);
     }
 
     #[test]
