@@ -14,6 +14,7 @@ mod draworder;
 mod edit;
 mod exchange;
 pub mod file;
+mod foncier;
 mod gripcmds;
 mod griphot;
 pub(crate) mod groups;
@@ -213,6 +214,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo_listing::specs());
         v.extend(topo_symbols::specs());
         v.extend(topo_labels::specs());
+        v.extend(foncier::specs());
         v.extend(terrain::specs());
         v
     })
