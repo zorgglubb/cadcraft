@@ -5,8 +5,11 @@
 
 pub mod crs;
 pub mod csv_points;
+pub mod edigeo;
 pub mod gsi;
+pub mod iso8211;
 
 pub use crs::{CrsDef, CrsError, CrsRegistry};
 pub use csv_points::{CsvImport, CsvPoint};
+pub use edigeo::{EdigeoError, EdigeoSummary};
 pub use gsi::{GsiImport, GsiPoint};

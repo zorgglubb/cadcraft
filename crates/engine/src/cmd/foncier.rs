@@ -10,8 +10,13 @@
 //! the hull" idea `cadcraft-terrain`'s triangulation already uses for its own boundary.
 //!
 //! **Scope, stated plainly**: curved parcel edges (a bulged polyline vertex) are refused rather
-//! than silently flattened; découpage (semi-)automatique (splitting a parcel to hit a target
-//! area) and the EDIGEO cadastral-reference import are later increments, not attempted here.
+//! than silently flattened. `topo.inspect_edigeo` reads the EDIGEO (ISO 8211) cadastral exchange
+//! container and reports its real field/subfield shape, but does not yet reconstruct parcel
+//! geometry from it: which tags hold a point's coordinates, an arc's point list, or a parcel's
+//! boundary is defined by EDIGEO's object nomenclature, not by the container format, and is
+//! deliberately not guessed from memory without a real export to check the mapping against -
+//! see `cadcraft_topo_io::edigeo` for why. `topo.import_edigeo` (turning that into parcel
+//! polylines) is the next increment once a real file's shape is known.
 
 use cadcraft_doc::{EntityKind, Handle};
 use cadcraft_geom::{Polyline, Vec2};
@@ -28,6 +33,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("topo.parcel_state", "Parcel State (listing)", run_parcel_state)
             .menu(&["Topo", "Foncier", "Parcel State"])
             .params("{layer?: string, path?: string (also writes a CSV)} → {parcels: [{reference, handle, layer, area}], path?}")
+            .noundo(),
+        CommandSpec::new("topo.inspect_edigeo", "Inspect EDIGEO File", run_inspect_edigeo)
+            .menu(&["Topo", "Foncier", "Référentiel fonds (EDIGEO)", "Inspecter"])
+            .params(
+                "{path: string} → {totalRecords, hasDdr, fieldTags: [{tag, recordCount, subfieldCountsSeen}], \
+                 sample: [{leaderIdentifier, fields: [{tag, subfields}]}]} (read-only: reports the file's real \
+                 field/subfield shape, does not import anything yet)",
+            )
             .noundo(),
     ]
 }
@@ -196,6 +209,34 @@ fn run_parcel_state(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+fn run_inspect_edigeo(_s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.inspect_edigeo";
+    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
+    let bytes = std::fs::read(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let summary = cadcraft_topo_io::edigeo::inspect(&bytes).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+
+    let field_tags: Vec<Value> = summary
+        .field_tags
+        .iter()
+        .map(|(tag, stats)| json!({ "tag": tag, "recordCount": stats.record_count, "subfieldCountsSeen": stats.subfield_counts_seen }))
+        .collect();
+    let sample: Vec<Value> = summary
+        .sample
+        .iter()
+        .map(|r| {
+            let fields: Vec<Value> = r.fields.iter().map(|f| json!({ "tag": f.tag, "subfields": f.subfields })).collect();
+            json!({ "leaderIdentifier": r.leader_identifier.to_string(), "fields": fields })
+        })
+        .collect();
+
+    Ok(json!({
+        "totalRecords": summary.total_records,
+        "hasDdr": summary.has_ddr,
+        "fieldTags": field_tags,
+        "sample": sample,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -265,5 +306,34 @@ mod tests {
         let content = content.expect("the CSV should have been written");
         assert!(content.starts_with("Reference;Handle;Layer;Area\n"));
         assert!(content.contains(";100\n") || content.contains(";100;"));
+    }
+
+    #[test]
+    fn inspect_edigeo_reports_field_tags_and_a_sample() {
+        use cadcraft_topo_io::iso8211::test_support::build_record;
+
+        let mut bytes = build_record(b'L', &[("0000", &["DDR"])]);
+        bytes.extend(build_record(b'D', &[("GEO", &["100.0", "200.0"]), ("LAB", &["P1"])]));
+
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-edigeo-inspect-test-{}.bin", std::process::id()));
+        std::fs::write(&path, &bytes).expect("writing the synthetic EDIGEO file should succeed");
+        let out = s.execute("topo.inspect_edigeo", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("should succeed");
+
+        assert_eq!(out["totalRecords"].as_u64(), Some(2));
+        assert_eq!(out["hasDdr"].as_bool(), Some(true));
+        let tags = out["fieldTags"].as_array().expect("fieldTags array");
+        assert!(tags.iter().any(|t| t["tag"] == "GEO" && t["recordCount"] == 1));
+        let sample = out["sample"].as_array().expect("sample array");
+        assert_eq!(sample.len(), 2);
+    }
+
+    #[test]
+    fn inspect_edigeo_reports_a_missing_file_as_an_error() {
+        let mut s = session_with_doc();
+        let out = s.execute("topo.inspect_edigeo", &json!({ "path": "/nonexistent/path/does-not-exist.edi" }));
+        assert!(out.is_err());
     }
 }
