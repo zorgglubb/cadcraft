@@ -9,5 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+cadcraft-geom = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

@@ -726,6 +726,7 @@ dependencies = [
 name = "cadcraft-topo-io"
 version = "0.7.0"
 dependencies = [
+ "cadcraft-geom",
  "serde",
  "thiserror 2.0.21",
 ]
