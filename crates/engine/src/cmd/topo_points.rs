@@ -5,7 +5,7 @@
 //! line, and inserts its result(s) as POINT entities in the active document.
 
 use cadcraft_geom::{Line as GLine, Vec2, Vec3, line_line_infinite};
-use cadcraft_topo_calc::point_at_bearing;
+use cadcraft_topo_calc::{gisement, point_at_bearing};
 use serde_json::{Value, json};
 
 use super::topo::{insert_point, vec3_req};
@@ -26,6 +26,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("topo.divide_segment", "Point: Divide Segment", run_divide_segment)
             .menu(&["Topo", "Points", "Divide Segment"])
             .params("{a: [x,y,z], b: [x,y,z], count: integer (>=2), code?: string, label?: bool, textHeight?: number}"),
+        CommandSpec::new("topo.angle_transfer", "Report d'angle (Angle Transfer)", run_angle_transfer)
+            .menu(&["Topo", "Points", "Angle Transfer"])
+            .alias(&["report_angle"])
+            .params("{vertex: [x,y,z], reference: [x,y,z], angle: gon, distance: number, code?: string, label?: bool, textHeight?: number}"),
     ]
 }
 
@@ -105,6 +109,23 @@ fn run_divide_segment(s: &mut Session, p: &Value) -> Result<Value> {
         points.push(insert_point(s, coord, code.clone(), label, text_height)?);
     }
     Ok(json!({ "points": points }))
+}
+
+/// *Report d'angle*: reproduces a given angle (turned from the direction `vertex -> reference`)
+/// at `vertex`, at the given distance - the classic drafting construction for laying out a new
+/// direction from a known one without first computing its absolute bearing by hand.
+fn run_angle_transfer(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.angle_transfer";
+    let vertex = vec3_req(CMD, p, "vertex")?;
+    let reference = vec3_req(CMD, p, "reference")?;
+    let angle_gon = f64_req(CMD, p, "angle")?;
+    let distance = f64_req(CMD, p, "distance")?;
+    let (code, label, text_height) = common_params(s, p)?;
+
+    let base_gisement = gisement(vertex, reference).map_err(|e| topo_err(CMD, e))?;
+    let coord = point_at_bearing(vertex, base_gisement + angle_gon, distance).map_err(|e| topo_err(CMD, e))?;
+    let point = insert_point(s, coord, code, label, text_height)?;
+    Ok(json!({ "point": point, "gisement": cadcraft_topo_calc::norm_gon(base_gisement + angle_gon) }))
 }
 
 #[cfg(test)]
@@ -200,6 +221,27 @@ mod tests {
     fn divide_segment_rejects_count_below_two() {
         let mut s = session_with_doc();
         let out = s.execute("topo.divide_segment", &json!({ "a": [0.0, 0.0, 0.0], "b": [10.0, 0.0, 0.0], "count": 1 }));
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn angle_transfer_turns_a_right_angle_from_a_known_direction() {
+        let mut s = session_with_doc();
+        // Reference due north of vertex (gisement 0 gon); turning +100 gon from it is due east.
+        let out = s
+            .execute("topo.angle_transfer", &json!({ "vertex": [0.0, 0.0, 0.0], "reference": [0.0, 10.0, 0.0], "angle": 100.0, "distance": 10.0 }))
+            .expect("should succeed");
+        let pt = &out["point"];
+        assert!((pt["x"].as_f64().unwrap_or(f64::NAN) - 10.0).abs() < 1e-9);
+        assert!((pt["y"].as_f64().unwrap_or(f64::NAN) - 0.0).abs() < 1e-9);
+        assert!((out["gisement"].as_f64().unwrap_or(f64::NAN) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn angle_transfer_rejects_a_coincident_vertex_and_reference() {
+        let mut s = session_with_doc();
+        let out =
+            s.execute("topo.angle_transfer", &json!({ "vertex": [5.0, 5.0, 0.0], "reference": [5.0, 5.0, 0.0], "angle": 50.0, "distance": 10.0 }));
         assert!(out.is_err());
     }
 }
