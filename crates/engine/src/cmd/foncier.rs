@@ -45,15 +45,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{layer?: string, path?: string (also writes a CSV)} → {parcels: [{reference, handle, layer, area}], path?}")
             .noundo(),
         CommandSpec::new("topo.inspect_edigeo", "Inspect EDIGEO File", run_inspect_edigeo)
-            .menu(&["Topo", "Foncier", "Référentiel fonds (EDIGEO)", "Inspecter"])
+            .menu(&["Topo", "Foncier", "Land Records (EDIGEO)", "Inspect"])
             .params(
                 "{path: string} → {totalRecords, hasDdr, fieldTags: [{tag, recordCount, subfieldCountsSeen}], \
                  sample: [{leaderIdentifier, fields: [{tag, subfields}]}]} (read-only: reports the file's real \
                  field/subfield shape, does not import anything yet)",
             )
             .noundo(),
-        CommandSpec::new("topo.import_edigeo", "Import EDIGEO (Référentiel fonds)", run_import_edigeo)
-            .menu(&["Topo", "Foncier", "Référentiel fonds (EDIGEO)", "Importer"])
+        CommandSpec::new("topo.import_edigeo", "Import EDIGEO (Land Records)", run_import_edigeo)
+            .menu(&["Topo", "Foncier", "Land Records (EDIGEO)", "Import"])
             .params(
                 "{paths: [string] (every .VEC file of one lot), layerPrefix?: string} → \
                  {imported, skipped: [{feature, class, reason}], featuresLinkedToAFace, facesKnown}",

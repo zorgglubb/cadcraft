@@ -1330,3 +1330,60 @@
 	Justify	За шириною
 	Text color	Колір тексту
 	Click the ruler to add a tab stop, right-click to remove one	Натисніть на лінійку, щоб додати табуляцію; права кнопка видаляє її
+	Angle Transfer	Перенесення кута
+	Calculations	Обчислення
+	Contour Lines	Контурні лінії
+	Distance & Bearing	Відстань і азимут
+	Divide Segment	Розділити відрізок
+	Elevation At Point	Висота в точці
+	Foncier	Земельні ділянки
+	GSI Carnet	Журнал GSI
+	Import EDIGEO (Land Records)	Імпорт EDIGEO (кадастр)
+	Import GSI Carnet	Імпортувати журнал GSI
+	Import Points (CSV/TXT)	Імпортувати точки (CSV/TXT)
+	Insert Topo Symbol	Вставити топографічний символ
+	Inspect	Перевірити
+	Inspect EDIGEO File	Перевірити файл EDIGEO
+	Label: Point Elevation	Підпис: висота точки
+	Labels	Підписи
+	Land Records (EDIGEO)	Кадастр (EDIGEO)
+	Listing: Points (CSV)	Список: точки (CSV)
+	Listings	Списки
+	Merge Parcels	Об'єднати ділянки
+	Parcel State	Стан ділянок
+	Parcel State (listing)	Стан ділянок (список)
+	Point: Distance & Bearing	Точка: відстань і азимут
+	Point: Divide Segment	Точка: розділити відрізок
+	Point: Line/Line Intersection	Точка: перетин прямих
+	Point: Projection on Alignment	Точка: проєкція на вісь
+	Points	Точки
+	Points (CSV)	Точки (CSV)
+	Points CSV/TXT	Точки CSV/TXT
+	Projection	Проєкція
+	Radiation	Полярна зйомка
+	Refresh	Оновити
+	Refresh Elevation Labels	Оновити підписи висот
+	Split Parcel	Розділити ділянку
+	Symbols	Символи
+	TIN	TIN
+	Terrain	Рельєф
+	Topo	Топо
+	Triangulate	Тріангулювати
+	Triangulate (TIN)	Тріангулювати (TIN)
+	Zero Value	Нульове значення
+	Zero Value (VO)	Нульове значення (VO)
+	Add .VEC File…	Додати файл .VEC…
+	Add at least one .VEC file first.	Спочатку додайте принаймні один файл .VEC.
+	Clear List	Очистити список
+	Import Lot	Імпортувати лот
+	Inspect First File	Перевірити перший файл
+	Merge Selection	Об'єднати вибрані
+	Merged	Об'єднано
+	No file queued.	Жодного файлу в черзі.
+	Select at least two closed polylines or regions first.	Спочатку виберіть принаймні два замкнені полілінії або регіони.
+	imported	імпортовано
+	parcel(s)	ділянка(ок)
+	record(s)	запис(ів)
+	skipped	пропущено
+	topo.merge_parcels - current selection	topo.merge_parcels - поточний вибір
+	topo.parcel_state	topo.parcel_state

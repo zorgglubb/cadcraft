@@ -1007,3 +1007,60 @@
 	Search for pattern	Rechercher un motif
 	Not a number or distance: {text}	Ni un nombre ni une distance : {text}
 	Query Texts	Interroger les textes
+	Angle Transfer	Report d'angle
+	Calculations	Calculs
+	Contour Lines	Courbes de niveau
+	Distance & Bearing	Distance et gisement
+	Divide Segment	Diviser un segment
+	Elevation At Point	Altitude en un point
+	Foncier	Foncier
+	GSI Carnet	Carnet GSI
+	Import EDIGEO (Land Records)	Importer EDIGEO (Référentiel fonds)
+	Import GSI Carnet	Importer un carnet GSI
+	Import Points (CSV/TXT)	Importer des points (CSV/TXT)
+	Insert Topo Symbol	Insérer un symbole topo
+	Inspect	Inspecter
+	Inspect EDIGEO File	Inspecter un fichier EDIGEO
+	Label: Point Elevation	Étiquette : altitude du point
+	Labels	Étiquettes
+	Land Records (EDIGEO)	Référentiel fonds (EDIGEO)
+	Listing: Points (CSV)	Listing : points (CSV)
+	Listings	Listings
+	Merge Parcels	Fusionner les parcelles
+	Parcel State	État du parcellaire
+	Parcel State (listing)	État du parcellaire (listing)
+	Point: Distance & Bearing	Point : distance et gisement
+	Point: Divide Segment	Point : diviser un segment
+	Point: Line/Line Intersection	Point : intersection droite/droite
+	Point: Projection on Alignment	Point : projection sur un alignement
+	Points	Points
+	Points (CSV)	Points (CSV)
+	Points CSV/TXT	Points CSV/TXT
+	Projection	Projection
+	Radiation	Rayonnement
+	Refresh	Actualiser
+	Refresh Elevation Labels	Actualiser les étiquettes d'altitude
+	Split Parcel	Diviser une parcelle
+	Symbols	Symboles
+	TIN	TIN
+	Terrain	Terrain
+	Topo	Topo
+	Triangulate	Trianguler
+	Triangulate (TIN)	Trianguler (TIN)
+	Zero Value	Valeur origine
+	Zero Value (VO)	Valeur origine (VO)
+	Add .VEC File…	Ajouter un fichier .VEC…
+	Add at least one .VEC file first.	Ajoutez d'abord au moins un fichier .VEC.
+	Clear List	Vider la liste
+	Import Lot	Importer le lot
+	Inspect First File	Inspecter le premier fichier
+	Merge Selection	Fusionner la sélection
+	Merged	Fusionné
+	No file queued.	Aucun fichier en attente.
+	Select at least two closed polylines or regions first.	Sélectionnez d'abord au moins deux polylignes fermées ou régions.
+	imported	importé(s)
+	parcel(s)	parcelle(s)
+	record(s)	enregistrement(s)
+	skipped	ignoré(s)
+	topo.merge_parcels - current selection	topo.merge_parcels - sélection actuelle
+	topo.parcel_state	topo.parcel_state

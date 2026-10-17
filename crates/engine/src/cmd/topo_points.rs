@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("topo.divide_segment", "Point: Divide Segment", run_divide_segment)
             .menu(&["Topo", "Points", "Divide Segment"])
             .params("{a: [x,y,z], b: [x,y,z], count: integer (>=2), code?: string, label?: bool, textHeight?: number}"),
-        CommandSpec::new("topo.angle_transfer", "Report d'angle (Angle Transfer)", run_angle_transfer)
+        CommandSpec::new("topo.angle_transfer", "Angle Transfer", run_angle_transfer)
             .menu(&["Topo", "Points", "Angle Transfer"])
             .alias(&["report_angle"])
             .params("{vertex: [x,y,z], reference: [x,y,z], angle: gon, distance: number, code?: string, label?: bool, textHeight?: number}"),
