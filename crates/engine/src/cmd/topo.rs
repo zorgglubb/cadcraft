@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn vec3_req(cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
+pub(crate) fn vec3_req(cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
     let v = p.get(key).ok_or_else(|| bad(cmd, format!("`{key}` ([x, y, z]) is required")))?;
     let a = v.as_array().ok_or_else(|| bad(cmd, format!("`{key}` must be an array [x, y, z]")))?;
     let get = |i: usize| a.get(i).and_then(Value::as_f64).filter(|n| n.is_finite());
@@ -76,7 +76,7 @@ fn resolve_vo(cmd: &str, station: Vec3, p: &Value) -> Result<(f64, Option<f64>)>
 
 /// Inserts one computed point as a POINT entity, with an optional TEXT label carrying its code,
 /// and returns the JSON summary used in every command's `points` array.
-fn insert_point(s: &mut Session, coord: Vec3, code: Option<String>, label: bool, text_height: f64) -> Result<Value> {
+pub(crate) fn insert_point(s: &mut Session, coord: Vec3, code: Option<String>, label: bool, text_height: f64) -> Result<Value> {
     let handle = s.add_entity(EntityKind::Point(Point { p: coord, angle: 0.0 }))?;
     let label_handle = match (&code, label) {
         (Some(c), true) if !c.is_empty() => {

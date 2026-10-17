@@ -71,6 +71,22 @@ pub fn dist2d(from: Vec3, to: Vec3) -> f64 {
     (from.x - to.x).hypot(from.y - to.y)
 }
 
+/// The point reached from `from`, travelling `distance` (horizontal) along `gisement_gon` (the
+/// same clockwise-from-north bearing convention as [`gisement`]), keeping `from`'s elevation.
+/// This is the "point à distance et angle" construction tool: a direct polar point, independent
+/// of any station orientation (unlike [`radiation`], which resolves a raw instrument reading
+/// through a zero value first).
+pub fn point_at_bearing(from: Vec3, gisement_gon: f64, distance: f64) -> Result<Vec3> {
+    if !gisement_gon.is_finite() {
+        return Err(TopoCalcError::NonFinite);
+    }
+    if !distance.is_finite() || distance < 0.0 {
+        return Err(TopoCalcError::InvalidDistance(distance));
+    }
+    let rad = gon_to_rad(norm_gon(gisement_gon));
+    Ok(Vec3::new(from.x + distance * rad.sin(), from.y + distance * rad.cos(), from.z))
+}
+
 /// One observation of a known reference point from the station: the reference's known
 /// coordinates and the horizontal circle reading (`Hz`, in gon) taken towards it.
 #[derive(Clone, Copy, Debug)]
@@ -254,6 +270,33 @@ mod tests {
         let station = Vec3::ZERO;
         let obs = RadiationObservation { hz_reading_gon: 0.0, zenith_gon: 100.0, slope_distance: -5.0, instrument_height: 1.5, target_height: 1.5 };
         assert_eq!(radiation(station, 0.0, obs), Err(TopoCalcError::InvalidDistance(-5.0)));
+    }
+
+    #[test]
+    fn point_at_bearing_cardinal_directions() {
+        let from = Vec3::new(1000.0, 1000.0, 50.0);
+        let east = point_at_bearing(from, 100.0, 10.0).expect("should succeed");
+        assert!(approx(east.x, 1010.0, 1e-9));
+        assert!(approx(east.y, 1000.0, 1e-9));
+        assert!(approx(east.z, 50.0, 1e-9), "elevation should carry over from `from`");
+
+        let north = point_at_bearing(from, 0.0, 10.0).expect("should succeed");
+        assert!(approx(north.x, 1000.0, 1e-9));
+        assert!(approx(north.y, 1010.0, 1e-9));
+    }
+
+    #[test]
+    fn point_at_bearing_rejects_negative_distance() {
+        assert_eq!(point_at_bearing(Vec3::ZERO, 0.0, -1.0), Err(TopoCalcError::InvalidDistance(-1.0)));
+    }
+
+    #[test]
+    fn point_at_bearing_normalizes_an_out_of_range_bearing() {
+        let from = Vec3::ZERO;
+        let a = point_at_bearing(from, 100.0, 5.0).expect("should succeed");
+        let b = point_at_bearing(from, 500.0, 5.0).expect("500 gon should normalize to 100 gon");
+        assert!(approx(a.x, b.x, 1e-9));
+        assert!(approx(a.y, b.y, 1e-9));
     }
 
     #[test]
