@@ -22,6 +22,8 @@ cadcraft-fonts = { path = "crates/fonts" }
 cadcraft-render = { path = "crates/render" }
 cadcraft-io = { path = "crates/io" }
 cadcraft-topo-calc = { path = "crates/topo-calc" }
+cadcraft-topo-io = { path = "crates/topo-io" }
+cadcraft-terrain = { path = "crates/terrain" }
 cadcraft-engine = { path = "crates/engine" }
 cadcraft-ui-egui = { path = "crates/ui-egui" }
 cadcraft-mcp = { path = "crates/mcp" }

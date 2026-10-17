@@ -634,6 +634,9 @@ dependencies = [
  "cadcraft-geom",
  "cadcraft-io",
  "cadcraft-render",
+ "cadcraft-terrain",
+ "cadcraft-topo-calc",
+ "cadcraft-topo-io",
  "log",
  "rstar",
  "serde",
@@ -703,7 +706,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadcraft-terrain"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-geom",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "cadcraft-topo-calc"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-geom",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadcraft-topo-io"
 version = "0.7.0"
 dependencies = [
  "cadcraft-geom",

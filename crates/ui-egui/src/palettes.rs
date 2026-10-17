@@ -13,6 +13,8 @@ use crate::theme::Tokens;
 pub mod patterns;
 /// The QuickCalc palette.
 pub mod quickcalc;
+/// The "Topo" Tool Sets tab (Foncier / Référentiel fonds EDIGEO).
+pub mod topo;
 
 type Tool = (Icon, &'static str, &'static str);
 
@@ -132,7 +134,7 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         // Tabs.
         let tab_h = 28.0;
         let mut x = r.left();
-        for name in ["Drafting", "Modeling"] {
+        for name in ["Drafting", "Modeling", "Topo"] {
             let w = 92.0;
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, tab_h));
             let active = app.ui.toolset_tab == name;
@@ -164,6 +166,12 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         let mut toggle_group = None;
         let mut tool_visible: Option<(String, bool)> = None;
         let mut restore: Vec<String> = Vec::new();
+        if app.ui.toolset_tab == "Topo" {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| topo::show(app, ui));
+            });
+            return;
+        }
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
