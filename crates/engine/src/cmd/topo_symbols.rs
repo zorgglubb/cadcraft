@@ -18,7 +18,7 @@ const SYMBOLS: &[(&str, &str)] =
     &[("borne", "CADCRAFT_TOPO_BORNE"), ("regard", "CADCRAFT_TOPO_REGARD"), ("arbre", "CADCRAFT_TOPO_ARBRE"), ("mobilier", "CADCRAFT_TOPO_MOBILIER")];
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("topo.insert_symbol", "Insert Topo Symbol", run_insert_symbol).menu(&["Topo", "Symbols", "Insert"]).params(
+    vec![CommandSpec::new("topo.insert_symbol", "Insert Topo Symbol", run_insert_symbol).menu(&["Topo 2D", "Symbols", "Insert"]).params(
         "{symbol: \"borne\"|\"regard\"|\"arbre\"|\"mobilier\", at: [x,y,z], code?: string, altitude?: number, scale?: number, rotation?: number}",
     )]
 }

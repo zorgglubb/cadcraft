@@ -20,9 +20,9 @@ const APPID: &str = "CADCRAFT_TOPO_LABEL";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.label_elevation", "Label: Point Elevation", run_label_elevation)
-            .menu(&["Topo", "Labels", "Elevation"])
+            .menu(&["Topo 2D", "Labels", "Elevation"])
             .params("{point: handle, at?: [x,y,z], prefix?: string, decimals?: integer, textHeight?: number}"),
-        CommandSpec::new("topo.refresh_labels", "Refresh Elevation Labels", run_refresh_labels).menu(&["Topo", "Labels", "Refresh"]).params("{}"),
+        CommandSpec::new("topo.refresh_labels", "Refresh Elevation Labels", run_refresh_labels).menu(&["Topo 2D", "Labels", "Refresh"]).params("{}"),
     ]
 }
 

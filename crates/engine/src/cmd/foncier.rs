@@ -38,14 +38,14 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.merge_parcels", "Merge Parcels", run_merge_parcels)
-            .menu(&["Topo", "Foncier", "Merge Parcels"])
+            .menu(&["Topo 2D", "Foncier", "Merge Parcels"])
             .params("{handles: [handle, ...]} (closed polylines or regions, at least 2) → {handle, area}"),
         CommandSpec::new("topo.parcel_state", "Parcel State (listing)", run_parcel_state)
-            .menu(&["Topo", "Foncier", "Parcel State"])
+            .menu(&["Topo 2D", "Foncier", "Parcel State"])
             .params("{layer?: string, path?: string (also writes a CSV)} → {parcels: [{reference, handle, layer, area}], path?}")
             .noundo(),
         CommandSpec::new("topo.inspect_edigeo", "Inspect EDIGEO File", run_inspect_edigeo)
-            .menu(&["Topo", "Foncier", "Land Records (EDIGEO)", "Inspect"])
+            .menu(&["Topo 2D", "Foncier", "Land Records (EDIGEO)", "Inspect"])
             .params(
                 "{path: string} → {totalRecords, hasDdr, fieldTags: [{tag, recordCount, subfieldCountsSeen}], \
                  sample: [{leaderIdentifier, fields: [{tag, subfields}]}]} (read-only: reports the file's real \
@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new("topo.import_edigeo", "Import EDIGEO (Land Records)", run_import_edigeo)
-            .menu(&["Topo", "Foncier", "Land Records (EDIGEO)", "Import"])
+            .menu(&["Topo 2D", "Foncier", "Land Records (EDIGEO)", "Import"])
             .params(
                 "{paths: [string] (every .VEC file of one lot), layerPrefix?: string} → \
                  {imported, skipped: [{feature, class, reason}], featuresLinkedToAFace, facesKnown}",

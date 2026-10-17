@@ -29,7 +29,7 @@ fn handle_param(cmd: &str, p: &Value, key: &str) -> Result<Handle> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("topo.split_parcel", "Split Parcel", run_split_parcel).menu(&["Topo", "Foncier", "Split Parcel"]).params(
+    vec![CommandSpec::new("topo.split_parcel", "Split Parcel", run_split_parcel).menu(&["Topo 2D", "Foncier", "Split Parcel"]).params(
         "{handle: handle, point: [x,y], angle: gon (bearing of the dividing line), targetArea?: number \
              (area of the side the line's right-hand normal points to), tolerance?: number, maxIterations?: integer} \
              → {handles: [positiveSide, negativeSide], areas: [positive, negative], iterations?}",

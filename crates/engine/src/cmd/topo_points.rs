@@ -15,19 +15,19 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.point_intersection", "Point: Line/Line Intersection", run_point_intersection)
-            .menu(&["Topo", "Points", "Intersection"])
+            .menu(&["Topo Calculations", "Points", "Intersection"])
             .params("{a1: [x,y,z], a2: [x,y,z], b1: [x,y,z], b2: [x,y,z], code?: string, label?: bool, textHeight?: number}"),
         CommandSpec::new("topo.point_at", "Point: Distance & Bearing", run_point_at)
-            .menu(&["Topo", "Points", "Distance & Bearing"])
+            .menu(&["Topo Calculations", "Points", "Distance & Bearing"])
             .params("{from: [x,y,z], gisement: gon, distance: number, code?: string, label?: bool, textHeight?: number}"),
         CommandSpec::new("topo.point_projection", "Point: Projection on Alignment", run_point_projection)
-            .menu(&["Topo", "Points", "Projection"])
+            .menu(&["Topo Calculations", "Points", "Projection"])
             .params("{point: [x,y,z], a: [x,y,z], b: [x,y,z], code?: string, label?: bool, textHeight?: number}"),
         CommandSpec::new("topo.divide_segment", "Point: Divide Segment", run_divide_segment)
-            .menu(&["Topo", "Points", "Divide Segment"])
+            .menu(&["Topo Calculations", "Points", "Divide Segment"])
             .params("{a: [x,y,z], b: [x,y,z], count: integer (>=2), code?: string, label?: bool, textHeight?: number}"),
         CommandSpec::new("topo.angle_transfer", "Angle Transfer", run_angle_transfer)
-            .menu(&["Topo", "Points", "Angle Transfer"])
+            .menu(&["Topo Calculations", "Points", "Angle Transfer"])
             .alias(&["report_angle"])
             .params("{vertex: [x,y,z], reference: [x,y,z], angle: gon, distance: number, code?: string, label?: bool, textHeight?: number}"),
     ]

@@ -5,8 +5,25 @@ use serde_json::{Value, json};
 
 use crate::CadApp;
 
-/// The top-level menus, in order.
-pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
+/// The top-level menus, in order. The three "Topo …" menus (Calculations, 2D, 3D) group the
+/// Topo/Foncier/Terrain commands the way Covadis groups its own "Cov. Calculs" / "Covadis 2D" /
+/// "Covadis 3D" tabs - each command's own `.menu()` path supplies the rest.
+pub const MENUS: &[&str] = &[
+    "File",
+    "Edit",
+    "View",
+    "Insert",
+    "Format",
+    "Tools",
+    "Topo Calculations",
+    "Topo 2D",
+    "Topo 3D",
+    "Draw",
+    "Dimension",
+    "Modify",
+    "Window",
+    "Help",
+];
 
 /// File ▸ Open Recent: one `ui.recent.<n>` item per recent file, then Clear Recent Files.
 pub const OPEN_RECENT: &str = "Open Recent";

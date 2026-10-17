@@ -15,22 +15,25 @@ use crate::{Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("topo.radiation", "Radiation", run_radiation).menu(&["Topo", "Calculations", "Radiation"]).alias(&["rayonnement"]).params(
-            "{station: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
+        CommandSpec::new("topo.radiation", "Radiation", run_radiation)
+            .menu(&["Topo Calculations", "Calculations", "Radiation"])
+            .alias(&["rayonnement"])
+            .params(
+                "{station: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
                  observations: [{hzReading, zenith, slopeDistance, instrumentHeight?, targetHeight?, code?}], label?: bool}",
-        ),
+            ),
         CommandSpec::new("topo.zero_value", "Zero Value (VO)", run_zero_value)
-            .menu(&["Topo", "Calculations", "Zero Value"])
+            .menu(&["Topo Calculations", "Calculations", "Zero Value"])
             .alias(&["vo"])
             .params("{station: [x,y,z], references: [{point: [x,y,z], hzReading: gon}]}"),
-        CommandSpec::new("topo.import_gsi", "Import GSI Carnet", run_import_gsi).menu(&["Topo", "Import", "GSI Carnet"]).params(
+        CommandSpec::new("topo.import_gsi", "Import GSI Carnet", run_import_gsi).menu(&["Topo Calculations", "Import", "GSI Carnet"]).params(
             "{path: string, station?: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
                  label?: bool, textHeight?: number} - station/vo (or references) are required only if the \
                  carnet has angle+distance shots with no ready-made coordinates; a coordinate-only carnet \
                  (WI 81/82/83) imports with neither",
         ),
         CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)", run_import_points)
-            .menu(&["Topo", "Import", "Points CSV/TXT"])
+            .menu(&["Topo Calculations", "Import", "Points CSV/TXT"])
             .params("{path: string, label?: bool, textHeight?: number}"),
     ]
 }

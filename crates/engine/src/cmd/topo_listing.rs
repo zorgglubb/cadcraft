@@ -16,7 +16,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.listing_points", "Listing: Points (CSV)", run_listing_points)
-            .menu(&["Topo", "Listings", "Points (CSV)"])
+            .menu(&["Topo Calculations", "Listings", "Points (CSV)"])
             .params("{path: string, layer?: string}")
             .noundo(),
     ]
