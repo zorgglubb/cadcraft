@@ -703,6 +703,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadcraft-topo-calc"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-geom",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "cadcraft-ui-egui"
 version = "0.7.0"
 dependencies = [
