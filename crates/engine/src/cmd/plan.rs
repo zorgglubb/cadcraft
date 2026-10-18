@@ -18,9 +18,12 @@
 //! often are) close to a gigabyte. JPEG, TIFF and PNG are the formats read; anything else is
 //! reported, not guessed at.
 //!
-//! The vector renderer only ever draws a raster image as its clip-boundary rectangle (never its
-//! pixels - it is a line renderer, not a compositor), so `plan.image_show` reads the actual file
-//! back for the selected image(s) and lets the UI put it in a preview window instead.
+//! `cadcraft-render` (this crate's vector tessellator, L2) only ever draws a raster image as its
+//! clip-boundary rectangle - it stays a line renderer, not a compositor, per the project's
+//! layering rule (no egui/wgpu below L5). The real pixels are composited straight onto the
+//! canvas instead, by `cadcraft-ui-egui` reading the file directly (`canvas.rs`'s `draw_images`).
+//! `plan.image_show` is separate: it reads the actual file back for the selected image(s) and
+//! lets the UI put it in its own preview window, e.g. to inspect one without panning to it.
 
 use cadcraft_doc::{EntityKind, Image};
 use cadcraft_geom::Vec2;

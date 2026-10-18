@@ -127,6 +127,10 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// Decoded textures for `plan.import_image` entities, by file path - `None` caches a decode
+    /// failure so a bad/missing file is reported once, not reread every frame. See
+    /// [`image_texture`].
+    image_textures: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 impl CanvasState {
@@ -702,6 +706,56 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     }
     if xf.rect.x_range().contains(o.x) {
         p.line_segment([pos2(o.x, xf.rect.top()), pos2(o.x, xf.rect.bottom())], Stroke::new(1.0, t.axis_y));
+    }
+}
+
+/// Decodes and uploads `path`'s image once, caching the `TextureHandle` (or the decode failure,
+/// as `None`, so a bad file is reported once rather than reread every frame). Mirrors
+/// `image_preview.rs`'s own `load`: full-file read, `image` crate sniffs the format, `to_rgba8`,
+/// `egui::ColorImage`, `ctx.load_texture`.
+fn image_texture<'a>(
+    cache: &'a mut std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    ctx: &egui::Context,
+    path: &str,
+) -> Option<&'a egui::TextureHandle> {
+    cache
+        .entry(path.to_string())
+        .or_insert_with(|| {
+            let bytes = std::fs::read(path).ok()?;
+            let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+            let size = [img.width() as usize, img.height() as usize];
+            let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+            Some(ctx.load_texture(format!("cc-image-{path}"), color, egui::TextureOptions::LINEAR))
+        })
+        .as_ref()
+}
+
+/// Model-space `plan.import_image` entities, drawn with their real pixels (not just the frame
+/// `cadcraft-render`'s vector tessellation already drew for them) - `cadcraft-render` stays free
+/// of egui/wgpu per the project's layering rule, so this reads the drawing directly instead of
+/// going through the `DisplayList`.
+fn draw_images(app: &mut CadApp, p: &egui::Painter, xf: &Xf, ctx: &egui::Context) {
+    let Ok(doc) = app.session.doc() else { return };
+    let Some(space) = doc.space(&cadcraft_doc::Space::Model) else { return };
+    let visible_layer = |layer: &str| doc.layer(layer).is_none_or(cadcraft_doc::Layer::visible);
+    let images: Vec<(Vec2, Vec2, Vec2, String)> = space
+        .iter()
+        .filter(|e| e.common.visible && visible_layer(&e.common.layer))
+        .filter_map(|e| match &e.kind {
+            cadcraft_doc::EntityKind::Image(i) if i.display & 1 != 0 => {
+                Some((i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, i.path.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (o, u, v, path) in images {
+        let Some(tex) = image_texture(&mut app.canvas.image_textures, ctx, &path) else { continue };
+        let mut mesh = egui::Mesh::with_texture(tex.id());
+        let corners = [o, o + u, o + u + v, o + v];
+        let uvs = [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)];
+        mesh.vertices.extend(corners.iter().zip(uvs).map(|(c, uv)| egui::epaint::Vertex { pos: xf.to_screen(*c), uv, color: Color32::WHITE }));
+        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+        p.add(Shape::mesh(mesh));
     }
 }
 
@@ -1621,6 +1675,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         None => {
             blockedit::wash(app, &painter, rect);
             draw_grid(app, &painter, &xf);
+            draw_images(app, &painter, &xf, ui.ctx());
             Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
         }
     };
@@ -2402,6 +2457,63 @@ pub(crate) mod tests {
         assert_eq!(alpha(true), 128);
         assert_eq!(alpha(false), 255);
         assert_eq!(alpha(true), 128);
+    }
+
+    /// An `EntityKind::Image` from `plan.import_image` draws its real decoded pixels, not just
+    /// the wireframe frame `cadcraft-render` tessellates for it - and a texture is decoded and
+    /// cached only once, even across several frames.
+    #[test]
+    fn images_decode_and_cache_their_texture() {
+        let path = std::env::temp_dir().join(format!("cadcraft-canvas-image-test-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])).save(&path).expect("writing the fixture PNG should succeed");
+
+        let mut app = crate::CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("new", &serde_json::json!({})).expect("new drawing should succeed");
+        let img = cadcraft_doc::Image { path: path.to_string_lossy().to_string(), size: Vec2::new(2.0, 2.0), ..Default::default() };
+        app.session
+            .doc_mut()
+            .expect("doc")
+            .add(&cadcraft_doc::Space::Model, cadcraft_doc::Common::default(), cadcraft_doc::EntityKind::Image(img))
+            .expect("adding the image entity should succeed");
+
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0));
+        let xf = Xf { rect, center: Vec2::ZERO, scale: 10.0 };
+        let ctx = egui::Context::default();
+        let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+
+        draw_images(&mut app, &painter, &xf, &ctx);
+        assert!(app.canvas.image_textures.get(&path.to_string_lossy().to_string()).is_some_and(Option::is_some), "the image should have decoded");
+
+        // A second frame must reuse the cached texture rather than redecode (the file is removed
+        // first, so a redecode would turn the cache entry into a failure).
+        let _ = std::fs::remove_file(&path);
+        draw_images(&mut app, &painter, &xf, &ctx);
+        assert!(app.canvas.image_textures.get(&path.to_string_lossy().to_string()).is_some_and(Option::is_some), "the cached texture should survive");
+    }
+
+    /// A missing or unreadable file is reported once, not reread every frame - the cache keeps
+    /// the failure as `None` rather than retrying.
+    #[test]
+    fn a_missing_image_file_caches_as_a_decode_failure() {
+        let mut app = crate::CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("new", &serde_json::json!({})).expect("new drawing should succeed");
+        let img = cadcraft_doc::Image { path: "/nonexistent/path/does-not-exist.png".into(), size: Vec2::new(2.0, 2.0), ..Default::default() };
+        app.session
+            .doc_mut()
+            .expect("doc")
+            .add(&cadcraft_doc::Space::Model, cadcraft_doc::Common::default(), cadcraft_doc::EntityKind::Image(img))
+            .expect("adding the image entity should succeed");
+
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0));
+        let xf = Xf { rect, center: Vec2::ZERO, scale: 10.0 };
+        let ctx = egui::Context::default();
+        let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+
+        draw_images(&mut app, &painter, &xf, &ctx);
+        assert!(
+            matches!(app.canvas.image_textures.get("/nonexistent/path/does-not-exist.png"), Some(None)),
+            "a missing file should cache as a failure"
+        );
     }
 
     /// Previews the session rebuilds with the current properties (the rubber band, copies of
