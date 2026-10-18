@@ -1103,3 +1103,19 @@
 	Import Image (Worldfile)	Importer une image (Worldfile)
 	Carroyage	Carroyage
 	Carroyage...	Carroyage...
+	Carroyage Window	Fenêtre de carroyage
+	Select window	Sélectionner la fenêtre
+	No window selected yet.	Aucune fenêtre sélectionnée.
+	Paper	Papier
+	Orientation	Orientation
+	Auto	Auto
+	Portrait	Portrait
+	Landscape	Paysage
+	Scale 1:	Échelle 1:
+	Cross spacing (paper cm)	Espacement des croix (cm papier)
+	Layout (blank: next free name)	Présentation (vide : prochain nom libre)
+	Select a window first.	Sélectionnez d'abord une fenêtre.
+	Enter a valid scale and spacing.	Saisissez une échelle et un espacement valides.
+	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Aperçu : {w}×{h} mm sur papier, {crosses} croix
+	Create	Créer
+	Carroyage created in layout {layout} on layer {layer}	Carroyage créé dans la présentation {layout}, calque {layer}

@@ -671,6 +671,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// The window last picked with CARROYAGEPICK (the Carroyage dialog's "Select window" button).
+    pub carroyage_pick: Option<(Vec2, Vec2)>,
 }
 
 impl Default for Session {
@@ -719,6 +721,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            carroyage_pick: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

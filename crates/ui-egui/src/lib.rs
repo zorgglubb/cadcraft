@@ -12,6 +12,7 @@ pub mod animation;
 pub mod autosave;
 pub mod bedit;
 pub mod canvas;
+pub mod carroyagedlg;
 pub mod chrome;
 pub mod clipboard;
 pub mod closing;
@@ -271,6 +272,8 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
+    /// The Carroyage dialog while open or picking its window ([`carroyagedlg`]).
+    pub carroyage_dlg: Option<carroyagedlg::State>,
 }
 
 impl CadApp {
@@ -309,6 +312,7 @@ impl CadApp {
             gpu_notice: None,
             hatch_dlg: None,
             bedit: bedit::State::default(),
+            carroyage_dlg: None,
         }
     }
 
@@ -600,6 +604,7 @@ impl CadApp {
         self.gpu_fault_tick(ctx);
         managers::plot_window_resume(self, ctx);
         hatchdlg::resume(self);
+        carroyagedlg::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

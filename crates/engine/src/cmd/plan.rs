@@ -32,7 +32,7 @@ use cadcraft_topo_io::CrsRegistry;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 const CRS_NAME_VAR: &str = "CADCRAFTCRSNAME";
 const CRS_EPSG_VAR: &str = "CADCRAFTCRSEPSG";
@@ -97,12 +97,19 @@ pub fn specs() -> Vec<CommandSpec> {
                  in 1:N), paper?: \"A4\"|\"A3\"|\"A2\"|\"A1\"|\"A0\" (default \"A4\"), landscape?: bool \
                  (default: whichever orientation fits `window`'s aspect), spacingCm?: number (default \
                  10, the cross spacing in paper cm), layout?: string (default: next free name), layer?: \
-                 string (default \"CARROYAGE\")} → {layout, layer, viewport, scale, crosses}. Fits \
-                 `window` into a new paper-space layout's printable area at exactly 1:`scale`, draws a \
-                 double-line border with tick marks, a cross every `spacingCm` of paper, and text labels \
-                 on round ground X/Y coordinates (in the drawing's assigned CRS, if any) along the \
-                 border, all on a new layer.",
+                 string (default \"CARROYAGE\"), preview?: bool (default false; reports {layout, layer, \
+                 scale, crosses, viewportWidth, viewportHeight, preview:true} without creating anything)} \
+                 → {layout, layer, viewport, scale, crosses}. Fits `window` into a new paper-space \
+                 layout's printable area at exactly 1:`scale`, draws a double-line border with tick \
+                 marks, a cross every `spacingCm` of paper, and text labels on round ground X/Y \
+                 coordinates (in the drawing's assigned CRS, if any) along the border, all on a new \
+                 layer.",
         ),
+        // No menu entry: only the Carroyage dialog's "Select window" button starts this (it hides
+        // the dialog, runs the pick, and reads the result back from `Session::carroyage_pick`).
+        CommandSpec::new("plan.carroyage_pick", "Carroyage Window", run_carroyage_pick)
+            .params("{} (typed/menu only: PLAN.CARROYAGE_PICK prompts for the window's two corners) → sets Session::carroyage_pick")
+            .interactive(|_| Ok(Box::new(CarroyagePickM::default()))),
     ]
 }
 
@@ -574,6 +581,60 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     let layer_existed = d0.layer(&layer_name).is_some();
     let epsg = d0.header.get(CRS_EPSG_VAR).and_then(cadcraft_doc::HVal::as_i64);
 
+    // --- Border, grid and label geometry: pure (no drawing access), shared by the real run and
+    // by `preview` (which stops right after this, before anything is written). ---
+    let outer = vp_rect;
+    let inset = to_ps(1.0).min(outer.width().min(outer.height()) * 0.02);
+    let inner = Bounds2::new(outer.min + Vec2::new(inset, inset), outer.max - Vec2::new(inset, inset));
+    let spacing_ps = to_ps(spacing_cm * 10.0);
+    let spacing_ground = spacing_ps * scale;
+    let text_h = (inset * 2.0).max(to_ps(1.5)).min(outer.height().min(outer.width()) * 0.05);
+    let tick_len = inset.max(to_ps(1.0)) * 1.5;
+    // Map a ground X/Y back to a paper point inside the viewport (paper = model / scale).
+    let to_paper = |gx: f64, gy: f64| -> Vec2 {
+        let dx = (gx - window.center().x) / scale;
+        let dy = (gy - window.center().y) / scale;
+        vp_rect.center() + Vec2::new(dx, dy)
+    };
+    let gx0 = round_to(window.min.x, spacing_ground);
+    let gx_start = if gx0 < window.min.x { gx0 + spacing_ground } else { gx0 };
+    let gy0 = round_to(window.min.y, spacing_ground);
+    let gy_start = if gy0 < window.min.y { gy0 + spacing_ground } else { gy0 };
+    let max_steps = 10_000usize;
+    let crosses = {
+        let mut count = 0usize;
+        let mut gxi = gx_start;
+        let mut ni = 0usize;
+        while gxi <= window.max.x && ni < max_steps {
+            let mut gyi = gy_start;
+            let mut nj = 0usize;
+            while gyi <= window.max.y && nj < max_steps {
+                let c = to_paper(gxi, gyi);
+                if c.x >= inner.min.x && c.x <= inner.max.x && c.y >= inner.min.y && c.y <= inner.max.y {
+                    count += 1;
+                }
+                gyi += spacing_ground;
+                nj += 1;
+            }
+            gxi += spacing_ground;
+            ni += 1;
+        }
+        count
+    };
+
+    if bool_or(p, "preview", false) {
+        // Read-only: no layer, layout or entity is created - just the numbers the dialog shows.
+        return Ok(json!({
+            "layout": layout_name,
+            "layer": layer_name,
+            "scale": scale,
+            "crosses": crosses,
+            "viewportWidth": outer.width() * unit_mm,
+            "viewportHeight": outer.height() * unit_mm,
+            "preview": true,
+        }));
+    }
+
     // --- Create the layout (its own page setup, sized/oriented for the chosen paper) ---
     let page = PageSetup { paper: paper.name.into(), width_mm: paper.width_mm, height_mm: paper.height_mm, landscape, ..PageSetup::default() };
 
@@ -613,9 +674,6 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     let vp_handle = d.add(&space, common.clone(), EntityKind::Viewport(viewport))?;
 
     // --- Border (double line) ---
-    let outer = vp_rect;
-    let inset = to_ps(1.0).min(outer.width().min(outer.height()) * 0.02);
-    let inner = Bounds2::new(outer.min + Vec2::new(inset, inset), outer.max - Vec2::new(inset, inset));
     for r in [outer, inner] {
         let corners = [r.min, Vec2::new(r.max.x, r.min.y), r.max, Vec2::new(r.min.x, r.max.y)];
         for i in 0..4 {
@@ -623,28 +681,7 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
 
-    // --- Crosses, ticks and round-coordinate labels ---
-    // Ground distance per paper spacing: a paper-space spacing of `spacingCm` cm maps to
-    // `spacing_ps * scale` ground units, since paper = model / scale.
-    let spacing_ps = to_ps(spacing_cm * 10.0);
-    let spacing_ground = spacing_ps * scale;
-    let text_h = (inset * 2.0).max(to_ps(1.5)).min(outer.height().min(outer.width()) * 0.05);
-    let tick_len = inset.max(to_ps(1.0)) * 1.5;
-    let mut crosses = 0usize;
-
-    // Map a ground X/Y back to a paper point inside the viewport (paper = model / scale).
-    let to_paper = |gx: f64, gy: f64| -> Vec2 {
-        let dx = (gx - window.center().x) / scale;
-        let dy = (gy - window.center().y) / scale;
-        vp_rect.center() + Vec2::new(dx, dy)
-    };
-
-    let gx0 = round_to(window.min.x, spacing_ground);
-    let gx_start = if gx0 < window.min.x { gx0 + spacing_ground } else { gx0 };
-    let gy0 = round_to(window.min.y, spacing_ground);
-    let gy_start = if gy0 < window.min.y { gy0 + spacing_ground } else { gy0 };
-
-    let max_steps = 10_000usize;
+    // --- Crosses, ticks and round-coordinate labels (geometry precomputed above) ---
     let mut gx = gx_start;
     let mut n = 0usize;
     while gx <= window.max.x && n < max_steps {
@@ -682,7 +719,6 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
                 let half = tick_len * 0.5;
                 carroyage_line(d, &space, &grid_common, c - Vec2::new(half, 0.0), c + Vec2::new(half, 0.0))?;
                 carroyage_line(d, &space, &grid_common, c - Vec2::new(0.0, half), c + Vec2::new(0.0, half))?;
-                crosses += 1;
             }
             gyi += spacing_ground;
             nj += 1;
@@ -704,6 +740,51 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
         "scale": scale,
         "crosses": crosses,
     }))
+}
+
+/// PLAN.CARROYAGE_PICK's non-interactive form: there is nothing to do headlessly (the window
+/// comes from the two points a person picks on screen), so a plain JSON call just errs.
+fn run_carroyage_pick(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(bad("plan.carroyage_pick", "pick the window's two corners on screen (typed/menu only)"))
+}
+
+/// PLAN.CARROYAGE_PICK: asks for the window's two corners, then leaves them in
+/// [`Session::carroyage_pick`] for the Carroyage dialog to take (never touches the drawing).
+#[derive(Default)]
+struct CarroyagePickM {
+    first: Option<Vec2>,
+}
+
+impl Interactive for CarroyagePickM {
+    fn name(&self) -> &'static str {
+        "CARROYAGEPICK"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match self.first {
+            None => Prompt::new("Specify first corner of the window to grid", Accept::POINT),
+            Some(a) => Prompt::new("Specify opposite corner", Accept::POINT).corner(a),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match (self.first, i) {
+            (_, Input::Cancel) => Ok(Step::Cancel),
+            (None, Input::Point(q)) => {
+                self.first = Some(q);
+                Ok(Step::Continue)
+            }
+            (Some(a), Input::Point(q)) => {
+                s.carroyage_pick = Some((a, q));
+                Ok(Step::Done)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+        let Some(a) = self.first else { return Vec::new() };
+        let r = Bounds2::new(a, c);
+        let corners = [r.min, Vec2::new(r.max.x, r.min.y), r.max, Vec2::new(r.min.x, r.max.y)];
+        (0..4).map(|i| EntityKind::Line(Line { a: corners[i].to3(0.0), b: corners[(i + 1) % 4].to3(0.0) })).collect()
+    }
 }
 
 #[cfg(test)]
@@ -1136,5 +1217,32 @@ mod tests {
         let mut s = session_with_doc();
         let out = s.execute("plan.carroyage", &json!({ "window": { "min": [0.0, 0.0], "max": [10.0, 10.0] }, "scale": 100, "paper": "A42" }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn carroyage_preview_reports_numbers_without_creating_anything() {
+        let mut s = session_with_doc();
+        let before = s.doc().expect("doc").layouts.len();
+        let out = s
+            .execute(
+                "plan.carroyage",
+                &json!({ "window": { "min": [0.0, 0.0], "max": [4000.0, 4000.0] }, "scale": 1000, "spacingCm": 1, "preview": true }),
+            )
+            .expect("preview should succeed");
+        assert_eq!(out["preview"].as_bool(), Some(true));
+        assert!(out["crosses"].as_u64().expect("crosses") > 0);
+        assert_eq!(s.doc().expect("doc").layouts.len(), before, "preview must not create a layout");
+        assert!(s.doc().expect("doc").layer("CARROYAGE").is_none(), "preview must not create a layer");
+    }
+
+    #[test]
+    fn carroyage_pick_sets_the_session_window_from_two_picked_corners() {
+        let mut s = session_with_doc();
+        assert!(s.execute("plan.carroyage_pick", &json!({})).is_err(), "no params: can't be done headlessly");
+        s.start("plan.carroyage_pick").expect("should start");
+        s.input(super::Input::Point(cadcraft_geom::Vec2::new(1.0, 2.0))).expect("first corner");
+        s.input(super::Input::Point(cadcraft_geom::Vec2::new(5.0, 6.0))).expect("opposite corner");
+        assert!(s.running.is_none(), "should be done");
+        assert_eq!(s.carroyage_pick, Some((cadcraft_geom::Vec2::new(1.0, 2.0), cadcraft_geom::Vec2::new(5.0, 6.0))));
     }
 }

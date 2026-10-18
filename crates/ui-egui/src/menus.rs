@@ -286,6 +286,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::crsdlg::open(app);
             Ok(Value::Null)
         }
+        // Typed, menu or toolbar (no parameters): needs a window and a scale picked first, so it
+        // opens the Carroyage dialog instead of erring on a missing `window`/`scale`. A JSON call
+        // (script, control channel, MCP) with real parameters runs the plain command as given.
+        "plan.carroyage" if params.is_null() && app.session.state().is_ok() => {
+            crate::carroyagedlg::open(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r

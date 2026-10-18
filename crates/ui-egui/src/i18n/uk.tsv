@@ -1425,3 +1425,19 @@
 	Import Image (Worldfile)	Імпорт зображення (Worldfile)
 	Carroyage	Карройяж
 	Carroyage...	Карройяж...
+	Carroyage Window	Область карройяжу
+	Select window	Вибрати область
+	No window selected yet.	Область ще не вибрано.
+	Paper	Папір
+	Orientation	Орієнтація
+	Auto	Авто
+	Portrait	Книжкова
+	Landscape	Альбомна
+	Scale 1:	Масштаб 1:
+	Cross spacing (paper cm)	Крок хрестиків (см на папері)
+	Layout (blank: next free name)	Презентація (порожньо: наступна вільна назва)
+	Select a window first.	Спочатку виберіть область.
+	Enter a valid scale and spacing.	Введіть коректний масштаб і крок.
+	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Попередній перегляд: {w}×{h} мм на папері, {crosses} хрест(ів)
+	Create	Створити
+	Carroyage created in layout {layout} on layer {layer}	Карройяж створено на презентації {layout}, шар {layer}
