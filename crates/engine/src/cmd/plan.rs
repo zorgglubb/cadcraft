@@ -5,10 +5,12 @@
 //!
 //! **Coordinate system, stated plainly**: `plan.set_crs` only tags the drawing (name + EPSG code
 //! in two custom DXF header variables, `$CADCRAFTCRSNAME`/`$CADCRAFTCRSEPSG`, round-tripped like
-//! any other header var) - it never reprojects existing geometry. Reprojecting would need a full
-//! PROJ-equivalent transform (`cadcraft_topo_io::crs`'s own doc comment says why that isn't
-//! implemented yet); tagging a drawing with the wrong system does not, by itself, move anything
-//! in it.
+//! any other header var) - it never moves anything. `plan.convert_crs` is the command that
+//! reprojects: it runs every entity's points through `cadcraft_topo_io::CrsRegistry::transform`
+//! (that crate's `projection` module says exactly which systems and ellipsoid assumptions this
+//! covers, and where it stops - no datum shift between any pair of this registry's built-in
+//! systems, and no definition at all for the legacy Lambert NTF zones or the DOM-TOM systems
+//! until one is `register_proj4`'d) and re-tags the drawing with the target system afterward.
 //!
 //! **Image import, stated plainly**: dimensions are read from the file's header only
 //! (`cadcraft_io::image_header`) - the pixel data itself is never loaded into memory, so this
@@ -46,11 +48,25 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Plan", "Coordinate System", "Assign Coordinate System"])
             .params(
                 "{epsg: number} or {name: string} → {epsg, name}. Informative only: tags the drawing, \
-                 never reprojects its existing geometry.",
+                 never reprojects its existing geometry - plan.convert_crs does that.",
             ),
         CommandSpec::new("plan.get_crs", "Current Coordinate System", run_get_crs)
             .menu(&["Plan", "Coordinate System", "Current Coordinate System"])
             .params("{} → {epsg, name} or {epsg: null, name: null} when none is assigned"),
+        // No menu entry of its own: the UI reads this to fill the Coordinate System dialog's
+        // EPSG picker (Assign and Convert both use it).
+        CommandSpec::new("plan.list_crs", "Coordinate Systems", run_list_crs)
+            .params("{query?: string (filters by name, case-insensitive)} → {systems: [{epsg, name, hasDefinition}]}"),
+        CommandSpec::new("plan.convert_crs", "Convert Coordinate System", run_convert_crs)
+            .menu(&["Plan", "Coordinate System", "Convert Coordinate System..."])
+            .params(
+                "{to: number (EPSG), from?: number (EPSG; default: the drawing's assigned system - \
+                 errs if neither is given and none is assigned), handles?: [string] (default: every \
+                 POINT/LINE/LWPOLYLINE/POLYLINE3D/CIRCLE/ARC/TEXT/MTEXT/INSERT/IMAGE in model space)} \
+                 → {converted, skipped, from, to}. Actually moves geometry (unlike plan.set_crs) and \
+                 re-tags the drawing with `to` when it finishes; cadcraft_topo_io::projection's doc \
+                 says which systems and ellipsoid assumptions this covers.",
+            ),
         CommandSpec::new("plan.import_image", "Import Image (Worldfile)", run_import_image)
             .menu(&["Plan", "Image", "Import Image (Worldfile)"])
             .params(
@@ -215,6 +231,107 @@ fn run_get_crs(s: &mut Session, _p: &Value) -> Result<Value> {
     let epsg = doc.header.get(CRS_EPSG_VAR).and_then(cadcraft_doc::HVal::as_i64);
     let name = doc.header.get(CRS_NAME_VAR).and_then(cadcraft_doc::HVal::as_str).map(str::to_string);
     Ok(json!({ "epsg": epsg, "name": name }))
+}
+
+fn run_list_crs(_s: &mut Session, p: &Value) -> Result<Value> {
+    let registry = CrsRegistry::with_defaults();
+    let query = str_param(p, "query");
+    let defs: Vec<&cadcraft_topo_io::CrsDef> = match query {
+        Some(q) if !q.trim().is_empty() => registry.find_by_name(q),
+        _ => registry.all(),
+    };
+    let systems: Vec<Value> = defs.iter().map(|d| json!({ "epsg": d.epsg, "name": d.name, "hasDefinition": d.proj4.is_some() })).collect();
+    Ok(json!({ "systems": systems }))
+}
+
+/// Every geometric point `plan.convert_crs` knows how to move, for whichever entity kinds carry
+/// one. Block/XREF interiors and a raster image's orientation vectors are left exactly as
+/// imported (the insertion point moves, the content doesn't re-scale or re-rotate for the new
+/// projection's local convergence/scale) - a stated simplification, like `plan.export_shp`'s.
+fn convert_entity_points(e: &mut cadcraft_doc::Entity, map: &impl Fn(cadcraft_geom::Vec3) -> cadcraft_geom::Vec3) -> bool {
+    let map2 = |p: Vec2| {
+        let m = map(cadcraft_geom::Vec3::new(p.x, p.y, 0.0));
+        Vec2::new(m.x, m.y)
+    };
+    match &mut e.kind {
+        EntityKind::Point(pt) => pt.p = map(pt.p),
+        EntityKind::Line(l) => {
+            l.a = map(l.a);
+            l.b = map(l.b);
+        }
+        EntityKind::LwPolyline(pl) => {
+            for v in &mut pl.vertices {
+                v.p = map2(v.p);
+            }
+        }
+        EntityKind::Polyline3d(pl) => {
+            for v in &mut pl.points {
+                *v = map(*v);
+            }
+        }
+        EntityKind::Circle(c) => c.center = map(c.center),
+        EntityKind::Arc(a) => a.center = map(a.center),
+        EntityKind::Text(t) => {
+            t.insert = map(t.insert);
+            t.align_pt = t.align_pt.map(map);
+        }
+        EntityKind::MText(t) => t.insert = map(t.insert),
+        EntityKind::Insert(i) => i.insert = map(i.insert),
+        EntityKind::Image(img) => img.insert = map(img.insert),
+        _ => return false,
+    }
+    true
+}
+
+fn run_convert_crs(s: &mut Session, p: &Value) -> Result<Value> {
+    use cadcraft_doc::HVal;
+    const CMD: &str = "plan.convert_crs";
+
+    let to_epsg = match p.get("to").and_then(Value::as_u64) {
+        Some(v) => u32::try_from(v).map_err(|_| bad(CMD, "`to` is out of range"))?,
+        None => return Err(bad(CMD, "`to` (EPSG number) is required")),
+    };
+    let from_epsg = match p.get("from").and_then(Value::as_u64) {
+        Some(v) => u32::try_from(v).map_err(|_| bad(CMD, "`from` is out of range"))?,
+        None => {
+            let doc = s.doc()?;
+            let epsg = doc.header.get(CRS_EPSG_VAR).and_then(HVal::as_i64).and_then(|v| u32::try_from(v).ok());
+            epsg.ok_or_else(|| bad(CMD, "no coordinate system is assigned to this drawing yet; pass `from`, or run plan.set_crs first"))?
+        }
+    };
+
+    let registry = CrsRegistry::with_defaults();
+    // Probe once up front: a bad pair (unknown EPSG, or one with no proj4 definition to
+    // reproject through) fails clearly here, rather than silently skipping every entity below.
+    registry.transform(from_epsg, to_epsg, Vec2::ZERO).map_err(|e| bad(CMD, e.to_string()))?;
+
+    let handles: Vec<cadcraft_doc::Handle> = match handles_param(p, "handles") {
+        Some(hs) => hs,
+        None => s.doc()?.space(&cadcraft_doc::Space::Model).map(|st| st.iter().map(|e| e.handle).collect()).unwrap_or_default(),
+    };
+
+    let map = move |v: cadcraft_geom::Vec3| {
+        let r = registry.transform(from_epsg, to_epsg, v.xy()).unwrap_or(v.xy());
+        cadcraft_geom::Vec3::new(r.x, r.y, v.z)
+    };
+    let (mut converted, mut skipped) = (0usize, 0usize);
+    for h in handles {
+        let mut moved = false;
+        s.doc_mut()?.modify_entity(h, |e| moved = convert_entity_points(e, &map)).map_err(|e| bad(CMD, e.to_string()))?;
+        if moved {
+            converted += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+
+    if let Some(def) = CrsRegistry::with_defaults().get(to_epsg) {
+        let doc = s.doc_mut()?;
+        doc.header.set(CRS_NAME_VAR, HVal::Str(def.name.clone()));
+        doc.header.set(CRS_EPSG_VAR, HVal::Int(i64::from(to_epsg)));
+    }
+
+    Ok(json!({ "converted": converted, "skipped": skipped, "from": from_epsg, "to": to_epsg }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -442,6 +559,99 @@ mod tests {
         let h = s.execute("pline", &json!({ "vertices": [[0.0, 0.0], [1.0, 0.0]] })).expect("should insert a line");
         let h = h["handle"].as_str().unwrap_or_default().to_string();
         assert!(s.execute("plan.image_show", &json!({ "handles": [h] })).is_err());
+    }
+
+    #[test]
+    fn list_crs_lists_and_filters_by_name() {
+        let mut s = session_with_doc();
+        let all = s.execute("plan.list_crs", &json!({})).expect("should succeed");
+        let all = all["systems"].as_array().expect("array");
+        assert!(all.len() > 10);
+        assert!(all.iter().any(|v| v["epsg"].as_u64() == Some(2154) && v["hasDefinition"].as_bool() == Some(true)));
+        // A named-only entry (no proj4 string yet) still shows up, flagged as such.
+        assert!(all.iter().any(|v| v["epsg"].as_u64() == Some(27572) && v["hasDefinition"].as_bool() == Some(false)));
+
+        let filtered = s.execute("plan.list_crs", &json!({ "query": "guyane" })).expect("should succeed");
+        let filtered = filtered["systems"].as_array().expect("array");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["epsg"].as_u64(), Some(2972));
+    }
+
+    #[test]
+    fn convert_crs_moves_geometry_and_retags_the_drawing() {
+        let mut s = session_with_doc();
+        s.execute("plan.set_crs", &json!({ "epsg": 2154 })).expect("should tag the drawing");
+        let line = s.execute("pline", &json!({ "vertices": [[652000.0, 6862000.0], [652010.0, 6862000.0]] })).expect("should insert a line");
+        let h = line["handle"].as_str().unwrap_or_default().to_string();
+
+        let out = s.execute("plan.convert_crs", &json!({ "to": 32631, "handles": [h.clone()] })).expect("should succeed");
+        assert_eq!(out["converted"].as_u64(), Some(1));
+        assert_eq!(out["skipped"].as_u64(), Some(0));
+        assert_eq!(out["from"].as_u64(), Some(2154));
+        assert_eq!(out["to"].as_u64(), Some(32631));
+
+        // The geometry actually moved: a Lambert-93 point around (652000, 6862000) lands well
+        // outside that range once it's UTM 31N metres.
+        let doc = s.doc().expect("doc");
+        let super::EntityKind::LwPolyline(pl) = &doc.entity(cadcraft_doc::Handle::parse_hex(&h).expect("handle")).expect("entity").kind else {
+            panic!("expected a polyline");
+        };
+        assert!(pl.vertices[0].p.x < 600_000.0, "{:?}", pl.vertices[0].p);
+
+        // And the drawing is now tagged with the target system.
+        let crs = s.execute("plan.get_crs", &json!({})).expect("should succeed");
+        assert_eq!(crs["epsg"].as_u64(), Some(32631));
+    }
+
+    #[test]
+    fn convert_crs_defaults_from_to_the_drawings_assigned_system() {
+        let mut s = session_with_doc();
+        s.execute("plan.set_crs", &json!({ "epsg": 2154 })).expect("should tag the drawing");
+        s.execute("point", &json!({ "at": [652000.0, 6862000.0] })).expect("should insert a point");
+        let out = s.execute("plan.convert_crs", &json!({ "to": 4326 })).expect("should succeed");
+        assert_eq!(out["from"].as_u64(), Some(2154));
+    }
+
+    #[test]
+    fn convert_crs_requires_a_from_when_nothing_is_assigned() {
+        let mut s = session_with_doc();
+        let out = s.execute("plan.convert_crs", &json!({ "to": 4326 }));
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn convert_crs_rejects_an_unknown_or_undefined_system_before_touching_anything() {
+        let mut s = session_with_doc();
+        s.execute("point", &json!({ "at": [652000.0, 6862000.0] })).expect("should insert a point");
+        assert!(s.execute("plan.convert_crs", &json!({ "from": 2154, "to": 999_999 })).is_err());
+        // The legacy NTF zones have no proj4 definition to reproject through.
+        assert!(s.execute("plan.convert_crs", &json!({ "from": 2154, "to": 27572 })).is_err());
+    }
+
+    #[test]
+    fn convert_crs_skips_entity_kinds_it_does_not_move() {
+        let mut s = session_with_doc();
+        s.execute("plan.set_crs", &json!({ "epsg": 2154 })).expect("should tag the drawing");
+        // A HATCH has no single representative point this command moves (a stated limitation) -
+        // built directly since the `hatch` command needs an existing closed boundary to fill.
+        let hatch = cadcraft_doc::Hatch {
+            pattern: "SOLID".into(),
+            solid: true,
+            loops: Vec::new(),
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: cadcraft_geom::Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        let h = s.add_entity(super::EntityKind::Hatch(hatch)).expect("should insert a hatch");
+        let out = s.execute("plan.convert_crs", &json!({ "to": 32631, "handles": [h.hex()] })).expect("should succeed");
+        assert_eq!(out["converted"].as_u64(), Some(0));
+        assert_eq!(out["skipped"].as_u64(), Some(1));
     }
 
     #[test]

@@ -1404,5 +1404,19 @@
 	Coordinate System	Система координат
 	Assign Coordinate System	Призначити систему координат
 	Current Coordinate System	Поточна система координат
+	Coordinate Systems	Системи координат
+	Convert Coordinate System	Конвертувати систему координат
+	Convert Coordinate System...	Конвертувати систему координат...
+	Current system	Поточна система
+	No coordinate system is assigned yet.	Систему координат ще не призначено.
+	Search	Пошук
+	no definition	без визначення
+	No coordinate system matches that search.	Жодна система координат не відповідає цьому пошуку.
+	Assign	Призначити
+	Convert...	Конвертувати...
+	Tags the drawing with this system; does not move anything.	Позначає креслення цією системою; нічого не переміщує.
+	Reprojects every point in the drawing from the current system to this one.	Перепроєктує кожну точку в кресленні з поточної системи в цю.
+	Assigned {name}	Призначено {name}
+	Converted {n} object(s) to EPSG:{to}	Конвертовано {n} об'єкт(и) до EPSG:{to}
 	Image	Зображення
 	Import Image (Worldfile)	Імпорт зображення (Worldfile)

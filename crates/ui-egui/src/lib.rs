@@ -19,6 +19,7 @@ pub mod cmdline;
 pub mod context_menu;
 pub mod control;
 pub mod credits;
+pub mod crsdlg;
 pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;

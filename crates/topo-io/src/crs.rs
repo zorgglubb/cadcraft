@@ -28,6 +28,10 @@ pub enum CrsError {
     InvalidEpsg,
     #[error("a CRS name must not be empty")]
     EmptyName,
+    #[error("EPSG:{0} is not in the registry")]
+    UnknownEpsg(u32),
+    #[error("EPSG:{epsg} ({name}) has no definition this registry can reproject through - register_proj4 one first")]
+    NoDefinition { epsg: u32, name: String },
 }
 
 /// A lookup table of coordinate reference systems, pre-loaded with the ones most French survey
@@ -103,6 +107,32 @@ impl CrsRegistry {
     }
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Every entry, sorted by EPSG code - for a picker listing every system this registry knows.
+    pub fn all(&self) -> Vec<&CrsDef> {
+        let mut v: Vec<&CrsDef> = self.entries.values().collect();
+        v.sort_by_key(|d| d.epsg);
+        v
+    }
+
+    /// Reprojects a point from one system to another, by way of geographic coordinates (both
+    /// systems' `to_geographic`/`from_geographic`) - see `projection.rs`'s module doc for the
+    /// ellipsoid and zero-datum-shift assumptions this rests on, and for which systems have no
+    /// definition to transform through yet. The identity (`from == to`) always succeeds, even for
+    /// an EPSG code this registry doesn't carry a usable definition for.
+    pub fn transform(&self, from_epsg: u32, to_epsg: u32, p: cadcraft_geom::Vec2) -> Result<cadcraft_geom::Vec2, CrsError> {
+        if from_epsg == to_epsg {
+            return Ok(p);
+        }
+        let projection_of = |epsg: u32| -> Result<crate::projection::Projection, CrsError> {
+            let def = self.get(epsg).ok_or(CrsError::UnknownEpsg(epsg))?;
+            let proj4 = def.proj4.as_deref().ok_or_else(|| CrsError::NoDefinition { epsg, name: def.name.clone() })?;
+            crate::projection::Projection::parse(proj4).ok_or_else(|| CrsError::NoDefinition { epsg, name: def.name.clone() })
+        };
+        let from = projection_of(from_epsg)?;
+        let to = projection_of(to_epsg)?;
+        Ok(to.from_geographic(from.to_geographic(p)))
     }
 }
 
@@ -248,5 +278,42 @@ mod tests {
         let guyane = reg.find_by_name("GUYANE");
         assert_eq!(guyane.len(), 1);
         assert_eq!(guyane[0].epsg, 2972);
+    }
+
+    #[test]
+    fn all_lists_every_entry_sorted_by_epsg() {
+        let reg = CrsRegistry::with_defaults();
+        let all = reg.all();
+        assert_eq!(all.len(), reg.len());
+        assert!(all.windows(2).all(|w| w[0].epsg <= w[1].epsg));
+    }
+
+    #[test]
+    fn transform_is_the_identity_when_from_and_to_are_the_same() {
+        let reg = CrsRegistry::with_defaults();
+        let p = cadcraft_geom::Vec2::new(123.0, 456.0);
+        // Even for an EPSG code the registry doesn't define at all.
+        assert_eq!(reg.transform(999_999, 999_999, p), Ok(p));
+    }
+
+    #[test]
+    fn transform_round_trips_lambert_93_through_utm_31n() {
+        let reg = CrsRegistry::with_defaults();
+        let p = cadcraft_geom::Vec2::new(652_000.0, 6_862_000.0); // central Paris, Lambert-93
+        let utm = reg.transform(2154, 32631, p).expect("should transform");
+        let back = reg.transform(32631, 2154, utm).expect("should transform back");
+        // Three round trips through UTM's truncated series (Lambert -> geographic -> UTM ->
+        // geographic -> Lambert), so a sub-millimetre residual is expected.
+        assert!((back.x - p.x).abs() < 1e-3, "{back:?}");
+        assert!((back.y - p.y).abs() < 1e-3, "{back:?}");
+    }
+
+    #[test]
+    fn transform_reports_an_unknown_epsg_or_a_system_with_no_definition() {
+        let reg = CrsRegistry::with_defaults();
+        let p = cadcraft_geom::Vec2::ZERO;
+        assert_eq!(reg.transform(999_999, 2154, p), Err(CrsError::UnknownEpsg(999_999)));
+        // EPSG:27572 (Lambert II étendu) is a named-only entry with no proj4 definition.
+        assert_eq!(reg.transform(27572, 2154, p), Err(CrsError::NoDefinition { epsg: 27572, name: "NTF (Paris) / Lambert zone II".to_string() }));
     }
 }

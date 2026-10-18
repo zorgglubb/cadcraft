@@ -10,6 +10,7 @@ pub mod edigeo_model;
 pub mod edigeo_text;
 pub mod gsi;
 pub mod iso8211;
+pub mod projection;
 
 pub use crs::{CrsDef, CrsError, CrsRegistry};
 pub use csv_points::{CsvImport, CsvPoint};

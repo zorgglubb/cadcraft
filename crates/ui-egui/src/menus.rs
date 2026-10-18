@@ -279,6 +279,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // frame, never its pixels, so this opens a window on the real file instead of running
         // the plain JSON command. A script or MCP call (with `handles` or `path` set) still gets
         // the plain `{images: [...]}` data back.
+        // Typed, menu or toolbar (no parameters): all three need a system picked, so they open
+        // the Coordinate System dialog instead of erring on a missing `epsg`/`to`. A JSON call
+        // (script, control channel, MCP) with real parameters runs the plain command as given.
+        "plan.set_crs" | "plan.get_crs" | "plan.convert_crs" if params.is_null() && app.session.state().is_ok() => {
+            crate::crsdlg::open(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r
@@ -857,6 +864,29 @@ mod tests {
         app.start("exportpdf");
         assert_eq!(asked.borrow().len(), 1);
         assert!(app.session.running.is_none());
+    }
+
+    #[test]
+    fn set_crs_get_crs_and_convert_crs_open_the_dialog_from_a_menu_but_json_calls_run_plainly() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.session.execute("new", &json!({})).expect("new drawing should succeed");
+
+        for id in ["plan.set_crs", "plan.get_crs", "plan.convert_crs"] {
+            app.ui.dialog = None;
+            app.start(id);
+            assert_eq!(app.ui.dialog.as_deref(), Some("crs"), "{id}");
+        }
+
+        // A JSON call still runs the plain command and never opens the dialog.
+        app.ui.dialog = None;
+        let r = app.run("plan.set_crs", json!({ "epsg": 2154 }));
+        assert!(r.is_ok());
+        assert!(app.ui.dialog.is_none());
+
+        app.ui.dialog = None;
+        let r = app.run("plan.get_crs", json!({}));
+        assert_eq!(r.ok().and_then(|v| v["epsg"].as_u64()), Some(2154));
+        assert!(app.ui.dialog.is_none());
     }
 }
 

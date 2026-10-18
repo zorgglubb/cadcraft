@@ -1082,5 +1082,19 @@
 	Coordinate System	Système de coordonnées
 	Assign Coordinate System	Attribuer un système de coordonnées
 	Current Coordinate System	Système de coordonnées actuel
+	Coordinate Systems	Systèmes de coordonnées
+	Convert Coordinate System	Convertir le système de coordonnées
+	Convert Coordinate System...	Convertir le système de coordonnées...
+	Current system	Système actuel
+	No coordinate system is assigned yet.	Aucun système de coordonnées n'est encore attribué.
+	Search	Rechercher
+	no definition	aucune définition
+	No coordinate system matches that search.	Aucun système de coordonnées ne correspond à cette recherche.
+	Assign	Attribuer
+	Convert...	Convertir...
+	Tags the drawing with this system; does not move anything.	Marque le dessin avec ce système ; ne déplace rien.
+	Reprojects every point in the drawing from the current system to this one.	Reprojette chaque point du dessin du système actuel vers celui-ci.
+	Assigned {name}	Système attribué : {name}
+	Converted {n} object(s) to EPSG:{to}	{n} objet(s) converti(s) vers EPSG:{to}
 	Image	Image
 	Import Image (Worldfile)	Importer une image (Worldfile)
