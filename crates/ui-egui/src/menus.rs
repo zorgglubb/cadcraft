@@ -242,6 +242,30 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" if params.is_null() && app.session.state().is_ok() => {
             return Some(crate::exchange::route(app, id));
         }
+        // Topo/Plan commands that take a file but have no interactive prompt sequence of their
+        // own: from a menu (no parameters) ask for the file through the same picker OPEN/IMPORT
+        // use; a JSON call (script, control channel, MCP) always carries `path` and never gets
+        // here. Without a picker service (a headless build), this falls through unhandled and
+        // the engine reports the ordinary "`path` is required" error.
+        "topo.import_gsi" | "topo.import_points" | "plan.import_shp" | "plan.import_image" if no_path => {
+            let pick = app.services.pick_open.as_ref()?;
+            let Some(path) = pick() else { return Some(Ok(Value::Null)) };
+            app.run(id, json!({ "path": path }))
+        }
+        // One file at a time for now - EDIGEO parcels often span several `.VEC` files, but
+        // there is no multi-select picker service yet (a further increment).
+        "topo.import_edigeo" if no_path => {
+            let pick = app.services.pick_open.as_ref()?;
+            let Some(path) = pick() else { return Some(Ok(Value::Null)) };
+            app.run(id, json!({ "paths": [path] }))
+        }
+        "plan.export_shp" if no_path => {
+            let pick = app.services.pick_save.as_ref()?;
+            let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
+            let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+            let Some(path) = pick(&format!("{}.shp", stem.unwrap_or_else(|| "Drawing".into()))) else { return Some(Ok(Value::Null)) };
+            app.run(id, json!({ "path": path }))
+        }
         "ui.toggle.statusbar" => {
             toggle(&mut app.ui.show_status_bar, params);
             Ok(Value::Null)
@@ -748,6 +772,40 @@ mod tests {
         assert!(r["data"].is_string());
         assert_eq!(asked.borrow().len(), 1);
         assert!(app.ui.dialog.is_none());
+    }
+
+    #[test]
+    fn topo_and_plan_file_commands_ask_for_a_file_from_a_menu_but_never_from_json() {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let opened = Rc::clone(&asked);
+        let saved = Rc::clone(&asked);
+        let services = Services {
+            pick_open: Some(Box::new(move || {
+                opened.borrow_mut().push("open".to_string());
+                None // cancelled - no file chosen
+            })),
+            pick_save: Some(Box::new(move |name: &str| {
+                saved.borrow_mut().push(name.to_string());
+                None
+            })),
+        };
+        let mut app = CadApp::new(Session::new(), services);
+        app.session.execute("new", &json!({})).expect("new drawing should succeed");
+
+        // From the menu/toolbar (no parameters): each asks for a file rather than erroring.
+        for id in ["topo.import_gsi", "topo.import_points", "topo.import_edigeo", "plan.import_shp", "plan.import_image"] {
+            app.start(id);
+        }
+        assert_eq!(asked.borrow().len(), 5);
+        app.start("plan.export_shp");
+        assert!(asked.borrow().last().is_some_and(|n| n.ends_with(".shp")));
+
+        // A JSON call (script, control channel, MCP) always carries its own `path` and never
+        // opens a dialog - it just reports the ordinary engine error for a bad path.
+        asked.borrow_mut().clear();
+        let r = app.run("plan.import_shp", json!({ "path": "/nonexistent/does-not-exist.shp" }));
+        assert!(r.is_err());
+        assert!(asked.borrow().is_empty());
     }
 
     #[test]
