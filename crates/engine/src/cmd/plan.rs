@@ -25,8 +25,8 @@
 //! `plan.image_show` is separate: it reads the actual file back for the selected image(s) and
 //! lets the UI put it in its own preview window, e.g. to inspect one without panning to it.
 
-use cadcraft_doc::{EntityKind, Image};
-use cadcraft_geom::Vec2;
+use cadcraft_doc::{Common, Drawing, EntityKind, HAlign, Image, Layer, Layout, Line, PageSetup, Space, Text, VAlign, Viewport};
+use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_io::{image_header, shp, worldfile};
 use cadcraft_topo_io::CrsRegistry;
 use serde_json::{Value, json};
@@ -92,6 +92,17 @@ pub fn specs() -> Vec<CommandSpec> {
         // A script or MCP call still gets the plain data back.
         CommandSpec::new("plan.image_show", "Show Image", run_image_show)
             .params("{handles?: [string] (default: the current selection)} → {images: [{handle, path}]}; errs if none of the targets is an IMAGE"),
+        CommandSpec::new("plan.carroyage", "Carroyage", run_carroyage).menu(&["Plan", "Carroyage..."]).params(
+            "{window: {min:[x,y], max:[x,y]} (the model-space area to grid), scale: number (the N \
+                 in 1:N), paper?: \"A4\"|\"A3\"|\"A2\"|\"A1\"|\"A0\" (default \"A4\"), landscape?: bool \
+                 (default: whichever orientation fits `window`'s aspect), spacingCm?: number (default \
+                 10, the cross spacing in paper cm), layout?: string (default: next free name), layer?: \
+                 string (default \"CARROYAGE\")} → {layout, layer, viewport, scale, crosses}. Fits \
+                 `window` into a new paper-space layout's printable area at exactly 1:`scale`, draws a \
+                 double-line border with tick marks, a cross every `spacingCm` of paper, and text labels \
+                 on round ground X/Y coordinates (in the drawing's assigned CRS, if any) along the \
+                 border, all on a new layer.",
+        ),
     ]
 }
 
@@ -438,6 +449,261 @@ fn run_import_image(s: &mut Session, p: &Value) -> Result<Value> {
     s.add_entity(EntityKind::Image(image))?;
 
     Ok(json!({ "width": width, "height": height, "insert": [placement.insert.x, placement.insert.y] }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Carroyage (coordinate-grid overlay), modeled after Covadis's "Carroyage" tool: a printed-plan
+// grid of crosses/ticks/round-coordinate labels over a model-space window shown at an exact
+// scale, on its own new paper-space layout and layer.
+// ---------------------------------------------------------------------------------------------
+
+fn next_carroyage_layout_name(d: &Drawing) -> String {
+    (1..=10_000).map(|i| format!("Carroyage{i}")).find(|n| d.layout(n).is_none()).unwrap_or_else(|| "Carroyage".into())
+}
+
+fn valid_plan_name(n: &str) -> bool {
+    let n = n.trim();
+    !n.is_empty() && n.chars().count() <= 255 && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c) || c.is_control())
+}
+
+/// A straight line placed directly into paper space (not through the session's current space).
+fn carroyage_line(d: &mut Drawing, space: &Space, common: &Common, a: Vec2, b: Vec2) -> Result<()> {
+    d.add(space, common.clone(), EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }))?;
+    Ok(())
+}
+
+/// A piece of text placed directly into paper space, centered on `at`.
+fn carroyage_text(d: &mut Drawing, space: &Space, common: &Common, at: Vec2, height: f64, value: String) -> Result<()> {
+    let text = Text {
+        insert: at.to3(0.0),
+        align_pt: Some(at.to3(0.0)),
+        height,
+        value,
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::Center,
+        valign: VAlign::Middle,
+    };
+    d.add(space, common.clone(), EntityKind::Text(text))?;
+    Ok(())
+}
+
+/// Round `v` to the nearest multiple of `step` (ground units), away from the window if `step`
+/// doesn't divide evenly - so grid lines never fall exactly on the window's own edges.
+fn round_to(v: f64, step: f64) -> f64 {
+    if step <= 0.0 || !step.is_finite() { v } else { (v / step).round() * step }
+}
+
+fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "plan.carroyage";
+
+    let win = p.get("window").ok_or_else(|| bad(CMD, "`window` ({min:[x,y], max:[x,y]}) is required"))?;
+    let wmin = point_param(win, "min").ok_or_else(|| bad(CMD, "`window.min` ([x,y]) is required"))?;
+    let wmax = point_param(win, "max").ok_or_else(|| bad(CMD, "`window.max` ([x,y]) is required"))?;
+    let window = Bounds2::new(wmin, wmax);
+    if window.width() < 1e-6 || window.height() < 1e-6 {
+        return Err(bad(CMD, "`window` has no area"));
+    }
+    if window.width() > 1e9 || window.height() > 1e9 {
+        return Err(bad(CMD, "`window` is too large"));
+    }
+
+    let scale = f64_req(CMD, p, "scale")?;
+    if scale <= 0.0 {
+        return Err(bad(CMD, "`scale` must be positive (the N in 1:N)"));
+    }
+
+    let paper_name = str_param(p, "paper").unwrap_or("A4");
+    let paper = cadcraft_render::paper_size(paper_name).ok_or_else(|| bad(CMD, format!("unknown paper format `{paper_name}`")))?;
+    let landscape = p.get("landscape").and_then(Value::as_bool).unwrap_or(window.width() >= window.height());
+    let (paper_w, paper_h) = if landscape {
+        (paper.height_mm.max(paper.width_mm), paper.width_mm.min(paper.height_mm))
+    } else {
+        (paper.width_mm.min(paper.height_mm), paper.height_mm.max(paper.width_mm))
+    };
+
+    let spacing_cm = f64_or(p, "spacingCm", 10.0);
+    if spacing_cm <= 0.0 || !spacing_cm.is_finite() {
+        return Err(bad(CMD, "`spacingCm` must be positive"));
+    }
+
+    let d0 = s.doc()?;
+    // Paper space is in the drawing's own measurement unit (mm for metric, inches for imperial;
+    // `cadcraft_render::sheet` does the same `/unit_mm` to get a layout's paper-space size), so
+    // every paper-space length here is computed in millimetres and then divided by `unit_mm`.
+    let unit_mm = cadcraft_render::paper::paper_unit_mm(d0);
+    let to_ps = |mm: f64| mm / unit_mm;
+    let margin_mm = 15.0_f64.min(paper_w.min(paper_h) * 0.1).max(5.0);
+    let printable_w = to_ps((paper_w - 2.0 * margin_mm).max(1.0));
+    let printable_h = to_ps((paper_h - 2.0 * margin_mm).max(1.0));
+
+    // The paper-space size `window` occupies at exactly 1:`scale` (paper = model / scale) - never
+    // silently rescaled, since that would mislabel every coordinate this command then writes.
+    let vp_w = window.width() / scale;
+    let vp_h = window.height() / scale;
+    if vp_w < 1e-9 || vp_h < 1e-9 {
+        return Err(bad(CMD, "the window is too small to fit at that scale"));
+    }
+    if vp_w > printable_w || vp_h > printable_h {
+        return Err(bad(
+            CMD,
+            format!("the window doesn't fit on {paper_name} at 1:{scale} - choose a larger paper, a smaller scale or a smaller window"),
+        ));
+    }
+    let origin = Vec2::new(to_ps(margin_mm), to_ps(margin_mm));
+    let vp_rect = Bounds2::new(origin, origin + Vec2::new(vp_w, vp_h));
+
+    let layout_name = match str_param(p, "layout") {
+        Some(n) => {
+            if !valid_plan_name(n) {
+                return Err(bad(CMD, "invalid layout name"));
+            }
+            if d0.layout(n).is_some() {
+                return Err(bad(CMD, format!("layout `{n}` already exists")));
+            }
+            n.to_string()
+        }
+        None => next_carroyage_layout_name(d0),
+    };
+    let layer_name = str_param(p, "layer").unwrap_or("CARROYAGE").to_string();
+    if !valid_plan_name(&layer_name) {
+        return Err(bad(CMD, "invalid layer name"));
+    }
+    let layer_existed = d0.layer(&layer_name).is_some();
+    let epsg = d0.header.get(CRS_EPSG_VAR).and_then(cadcraft_doc::HVal::as_i64);
+
+    // --- Create the layout (its own page setup, sized/oriented for the chosen paper) ---
+    let page = PageSetup { paper: paper.name.into(), width_mm: paper.width_mm, height_mm: paper.height_mm, landscape, ..PageSetup::default() };
+
+    // Computed before the mutable borrow below (it reads the drawing itself).
+    let common = s.current_common();
+    let mut grid_common = common.clone();
+    grid_common.layer = layer_name.clone();
+
+    let d = s.doc_mut()?;
+    if !layer_existed {
+        d.layers.push(Layer::new(&layer_name));
+    }
+    let order = d.layouts.iter().map(|l| l.tab_order).max().unwrap_or(0).saturating_add(1);
+    d.layouts.push(Layout { page, ..Layout::new(&layout_name, order) });
+
+    let space = Space::Paper(layout_name.clone());
+
+    // --- The viewport showing `window` at exactly 1:`scale` ---
+    let next_id = d
+        .layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None })
+        .max()
+        .unwrap_or(1)
+        .max(1)
+        .saturating_add(1);
+    let viewport = Viewport {
+        center: vp_rect.center().to3(0.0),
+        width: vp_rect.width(),
+        height: vp_rect.height(),
+        view_center: window.center(),
+        view_height: window.height(),
+        id: next_id,
+        ..Default::default()
+    };
+    let vp_handle = d.add(&space, common.clone(), EntityKind::Viewport(viewport))?;
+
+    // --- Border (double line) ---
+    let outer = vp_rect;
+    let inset = to_ps(1.0).min(outer.width().min(outer.height()) * 0.02);
+    let inner = Bounds2::new(outer.min + Vec2::new(inset, inset), outer.max - Vec2::new(inset, inset));
+    for r in [outer, inner] {
+        let corners = [r.min, Vec2::new(r.max.x, r.min.y), r.max, Vec2::new(r.min.x, r.max.y)];
+        for i in 0..4 {
+            carroyage_line(d, &space, &grid_common, corners[i], corners[(i + 1) % 4])?;
+        }
+    }
+
+    // --- Crosses, ticks and round-coordinate labels ---
+    // Ground distance per paper spacing: a paper-space spacing of `spacingCm` cm maps to
+    // `spacing_ps * scale` ground units, since paper = model / scale.
+    let spacing_ps = to_ps(spacing_cm * 10.0);
+    let spacing_ground = spacing_ps * scale;
+    let text_h = (inset * 2.0).max(to_ps(1.5)).min(outer.height().min(outer.width()) * 0.05);
+    let tick_len = inset.max(to_ps(1.0)) * 1.5;
+    let mut crosses = 0usize;
+
+    // Map a ground X/Y back to a paper point inside the viewport (paper = model / scale).
+    let to_paper = |gx: f64, gy: f64| -> Vec2 {
+        let dx = (gx - window.center().x) / scale;
+        let dy = (gy - window.center().y) / scale;
+        vp_rect.center() + Vec2::new(dx, dy)
+    };
+
+    let gx0 = round_to(window.min.x, spacing_ground);
+    let gx_start = if gx0 < window.min.x { gx0 + spacing_ground } else { gx0 };
+    let gy0 = round_to(window.min.y, spacing_ground);
+    let gy_start = if gy0 < window.min.y { gy0 + spacing_ground } else { gy0 };
+
+    let max_steps = 10_000usize;
+    let mut gx = gx_start;
+    let mut n = 0usize;
+    while gx <= window.max.x && n < max_steps {
+        let px = to_paper(gx, window.center().y).x;
+        if px >= outer.min.x && px <= outer.max.x {
+            // Ticks on the top and bottom border.
+            carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.min.y), Vec2::new(px, outer.min.y + tick_len))?;
+            carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len), Vec2::new(px, outer.max.y))?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.min.y - text_h), text_h, format!("{gx:.0}"))?;
+        }
+        gx += spacing_ground;
+        n += 1;
+    }
+    let mut gy = gy_start;
+    n = 0;
+    while gy <= window.max.y && n < max_steps {
+        let py = to_paper(window.center().x, gy).y;
+        if py >= outer.min.y && py <= outer.max.y {
+            carroyage_line(d, &space, &grid_common, Vec2::new(outer.min.x, py), Vec2::new(outer.min.x + tick_len, py))?;
+            carroyage_line(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len, py), Vec2::new(outer.max.x, py))?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(outer.min.x - text_h * 2.0, py), text_h, format!("{gy:.0}"))?;
+        }
+        gy += spacing_ground;
+        n += 1;
+    }
+    // Interior crosses at every grid intersection.
+    let mut gxi = gx_start;
+    let mut ni = 0usize;
+    while gxi <= window.max.x && ni < max_steps {
+        let mut gyi = gy_start;
+        let mut nj = 0usize;
+        while gyi <= window.max.y && nj < max_steps {
+            let c = to_paper(gxi, gyi);
+            if c.x >= inner.min.x && c.x <= inner.max.x && c.y >= inner.min.y && c.y <= inner.max.y {
+                let half = tick_len * 0.5;
+                carroyage_line(d, &space, &grid_common, c - Vec2::new(half, 0.0), c + Vec2::new(half, 0.0))?;
+                carroyage_line(d, &space, &grid_common, c - Vec2::new(0.0, half), c + Vec2::new(0.0, half))?;
+                crosses += 1;
+            }
+            gyi += spacing_ground;
+            nj += 1;
+        }
+        gxi += spacing_ground;
+        ni += 1;
+    }
+
+    // One label naming the CRS, if the drawing has one assigned ("suivant epsg").
+    if let Some(epsg) = epsg {
+        carroyage_text(d, &space, &grid_common, Vec2::new(outer.center().x, outer.max.y + text_h), text_h, format!("EPSG:{epsg}"))?;
+    }
+
+    s.touch();
+    Ok(json!({
+        "layout": layout_name,
+        "layer": layer_name,
+        "viewport": vp_handle.hex(),
+        "scale": scale,
+        "crosses": crosses,
+    }))
 }
 
 #[cfg(test)]
@@ -824,5 +1090,51 @@ mod tests {
         let out = s.execute("plan.import_image", &json!({ "path": path.to_string_lossy() }));
         assert!(out.is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn carroyage_creates_a_layout_layer_and_viewport_at_the_requested_scale() {
+        let mut s = session_with_doc();
+        s.execute("plan.set_crs", &json!({ "epsg": 2154 })).expect("should tag the drawing");
+        let out = s
+            .execute(
+                "plan.carroyage",
+                &json!({ "window": { "min": [0.0, 0.0], "max": [4000.0, 4000.0] }, "scale": 1000, "spacingCm": 1, "paper": "A4" }),
+            )
+            .expect("carroyage should succeed");
+        let layout_name = out["layout"].as_str().expect("layout name").to_string();
+        let layer_name = out["layer"].as_str().expect("layer name").to_string();
+        assert_eq!(layer_name, "CARROYAGE");
+        assert!(out["crosses"].as_u64().expect("crosses count") > 0);
+
+        let d = s.doc().expect("doc");
+        assert!(d.layer(&layer_name).is_some(), "the CARROYAGE layer should be created");
+        let layout = d.layout(&layout_name).expect("the new layout should exist");
+        let vp = layout
+            .entities
+            .iter()
+            .find_map(|e| if let super::EntityKind::Viewport(v) = &e.kind { Some(v) } else { None })
+            .expect("the layout should have a viewport");
+        // scale = height / view_height, in mm per ground unit at 1:1000 for a metric drawing.
+        let scale = vp.height / vp.view_height;
+        assert!((scale - 1.0 / 1000.0).abs() < 1e-9, "scale should be 1:1000, got {scale}");
+        assert!(vp.view_center.x > 1900.0 && vp.view_center.x < 2100.0, "view should be centered on the requested window");
+
+        // A cross, tick or label landed on the new layer.
+        assert!(layout.entities.iter().any(|e| e.common.layer == layer_name));
+    }
+
+    #[test]
+    fn carroyage_rejects_an_empty_window() {
+        let mut s = session_with_doc();
+        let out = s.execute("plan.carroyage", &json!({ "window": { "min": [0.0, 0.0], "max": [0.0, 0.0] }, "scale": 100 }));
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn carroyage_rejects_an_unknown_paper_format() {
+        let mut s = session_with_doc();
+        let out = s.execute("plan.carroyage", &json!({ "window": { "min": [0.0, 0.0], "max": [10.0, 10.0] }, "scale": 100, "paper": "A42" }));
+        assert!(out.is_err());
     }
 }
