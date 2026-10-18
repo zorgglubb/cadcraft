@@ -29,6 +29,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+mod plan;
 mod pline_opts;
 pub mod plotters;
 mod props;
@@ -218,6 +219,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(foncier::specs());
         v.extend(topo_split::specs());
         v.extend(terrain::specs());
+        v.extend(plan::specs());
         v
     })
 }

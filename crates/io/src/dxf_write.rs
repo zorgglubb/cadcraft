@@ -248,6 +248,12 @@ fn oblique_52(w: &mut W, dm: &Dimension, base: f64) {
 /// Header variables we write, with their group codes (DXF Reference, HEADER section).
 /// `P2`/`P3` = 2D/3D point.
 const HEADER_VARS: &[(&str, i32)] = &[
+    // CADCraft-specific, not a real AutoCAD system variable: the drawing's assigned coordinate
+    // system (`plan.set_crs`), informative only (nothing reprojects when it changes). Any
+    // reader that doesn't know these two names ignores them, per ordinary DXF custom-$var
+    // practice.
+    ("CADCRAFTCRSNAME", 1),
+    ("CADCRAFTCRSEPSG", 70),
     ("INSBASE", -3),
     ("LIMMIN", -2),
     ("LIMMAX", -2),

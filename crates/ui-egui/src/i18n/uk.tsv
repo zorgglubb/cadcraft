@@ -1390,3 +1390,12 @@
 	Topo Calculations	Топо обчислення
 	Topo 2D	Топо 2D
 	Topo 3D	Топо 3D
+	Plan	План
+	Import/Export	Імпорт/Експорт
+	Import Shapefile (SHP)	Імпорт Shapefile (SHP)
+	Export Shapefile (SHP)	Експорт Shapefile (SHP)
+	Coordinate System	Система координат
+	Assign Coordinate System	Призначити систему координат
+	Current Coordinate System	Поточна система координат
+	Image	Зображення
+	Import Image (Worldfile)	Імпорт зображення (Worldfile)

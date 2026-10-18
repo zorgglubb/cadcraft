@@ -1067,3 +1067,12 @@
 	Topo Calculations	Topo Calculs
 	Topo 2D	Topo 2D
 	Topo 3D	Topo 3D
+	Plan	Plan
+	Import/Export	Importation/Exportation
+	Import Shapefile (SHP)	Importer Shapefile (SHP)
+	Export Shapefile (SHP)	Exporter en SHP
+	Coordinate System	Système de coordonnées
+	Assign Coordinate System	Attribuer un système de coordonnées
+	Current Coordinate System	Système de coordonnées actuel
+	Image	Image
+	Import Image (Worldfile)	Importer une image (Worldfile)

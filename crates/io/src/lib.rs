@@ -12,10 +12,13 @@ mod dxf_read;
 mod dxf_table;
 mod dxf_write;
 mod dxf_xref;
+pub mod image_header;
 pub mod pdf;
 pub mod plotter;
+pub mod shp;
 pub mod svg;
 mod svg_read;
+pub mod worldfile;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
