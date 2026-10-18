@@ -19,7 +19,7 @@ fn with_options(_: &Drawing, _: &str, o: &SaveAs) -> Result<Vec<u8>, String> {
 fn default_save_version_applies_to_new_drawings_and_persists() {
     set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"plain".to_vec()), plot: None });
     set_write_as(with_options);
-    let services = Services { pick_save: Some(Box::new(|_: &str| Some(picked().to_string_lossy().to_string()))), ..Services::default() };
+    let services = Services { pick_save: Some(Box::new(|_: &str, _filters| Some(picked().to_string_lossy().to_string()))), ..Services::default() };
     let mut app = CadApp::new(Session::new(), services);
     assert_eq!(app.run("ui.saveversion", json!({})).ok(), Some(json!({ "saveVersion": "2018" })), "2018 by default");
     assert!(app.run("ui.saveversion", json!({ "version": "2005" })).is_err());

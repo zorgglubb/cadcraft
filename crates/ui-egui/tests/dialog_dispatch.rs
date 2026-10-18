@@ -12,11 +12,11 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
     let picks = Rc::new(Cell::new(0));
     let (a, b) = (picks.clone(), picks.clone());
     let services = Services {
-        pick_open: Some(Box::new(move || {
+        pick_open: Some(Box::new(move |_filters| {
             a.set(a.get() + 1);
             None
         })),
-        pick_save: Some(Box::new(move |_| {
+        pick_save: Some(Box::new(move |_name, _filters| {
             b.set(b.get() + 1);
             None
         })),

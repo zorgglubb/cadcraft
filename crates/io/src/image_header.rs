@@ -1,13 +1,13 @@
-//! Pixel dimensions of a JPEG or TIFF image read from its **header only** - never the pixel
+//! Pixel dimensions of a JPEG, TIFF or PNG image read from its **header only** - never the pixel
 //! data - so a multi-gigabyte aerial photo can be placed with a worldfile ([`crate::worldfile`])
-//! without loading the whole file into memory. Formats and marker/tag layouts are from the
-//! public JPEG (ITU-T T.81 / JFIF) and TIFF 6.0 specifications.
+//! without loading the whole file into memory. Formats and marker/tag/chunk layouts are from the
+//! public JPEG (ITU-T T.81 / JFIF), TIFF 6.0 and PNG (ISO/IEC 15948) specifications.
 
 use std::io::{Read, Seek, SeekFrom};
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum ImageHeaderError {
-    #[error("not a recognised JPEG or TIFF file (no matching magic bytes)")]
+    #[error("not a recognised JPEG, TIFF or PNG file (no matching magic bytes)")]
     UnknownFormat,
     #[error("truncated or corrupt {0} header: {1}")]
     Truncated(&'static str, &'static str),
@@ -30,18 +30,39 @@ const MAX_TIFF_ENTRIES: u32 = 65536;
 /// Reads just the pixel width/height of a JPEG or TIFF file via a seekable reader - a
 /// `std::fs::File` for a file on disk, so a 1GB image costs only a handful of small reads.
 pub fn dimensions<R: Read + Seek>(r: &mut R) -> Result<(u32, u32), ImageHeaderError> {
-    let mut magic = [0u8; 4];
+    let mut magic = [0u8; 8];
     r.seek(SeekFrom::Start(0))?;
     let n = r.read(&mut magic)?;
     if n >= 2 && magic[0] == 0xFF && magic[1] == 0xD8 {
         r.seek(SeekFrom::Start(0))?;
         jpeg_dimensions(r)
-    } else if n >= 4 && (magic == [0x49, 0x49, 0x2A, 0x00] || magic == [0x4D, 0x4D, 0x00, 0x2A]) {
+    } else if n >= 4 && (magic[..4] == [0x49, 0x49, 0x2A, 0x00] || magic[..4] == [0x4D, 0x4D, 0x00, 0x2A]) {
         r.seek(SeekFrom::Start(0))?;
         tiff_dimensions(r)
+    } else if n >= 8 && magic == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        png_dimensions(r)
     } else {
         Err(ImageHeaderError::UnknownFormat)
     }
+}
+
+/// PNG: an 8-byte signature, then its first chunk is always a 13-byte `IHDR` - a 4-byte length,
+/// the `IHDR` tag, then big-endian width and height (ISO/IEC 15948 §11.2.2).
+fn png_dimensions<R: Read + Seek>(r: &mut R) -> Result<(u32, u32), ImageHeaderError> {
+    r.seek(SeekFrom::Start(8))?;
+    let mut chunk_header = [0u8; 8];
+    r.read_exact(&mut chunk_header).map_err(|_| ImageHeaderError::Truncated("PNG", "missing IHDR chunk"))?;
+    if &chunk_header[4..8] != b"IHDR" {
+        return Err(ImageHeaderError::Truncated("PNG", "first chunk is not IHDR"));
+    }
+    let mut dims = [0u8; 8];
+    r.read_exact(&mut dims).map_err(|_| ImageHeaderError::Truncated("PNG", "truncated IHDR chunk"))?;
+    let width = u32::from_be_bytes([dims[0], dims[1], dims[2], dims[3]]);
+    let height = u32::from_be_bytes([dims[4], dims[5], dims[6], dims[7]]);
+    if width == 0 || height == 0 {
+        return Err(ImageHeaderError::Truncated("PNG", "IHDR reports a zero dimension"));
+    }
+    Ok((width, height))
 }
 
 /// Convenience: dimensions of a file on disk, by path.
@@ -245,6 +266,38 @@ mod tests {
     #[test]
     fn truncated_tiff_is_an_error_not_a_panic() {
         let mut c = Cursor::new(vec![0x49, 0x49, 0x2A, 0x00, 8, 0, 0, 0]);
+        assert!(dimensions(&mut c).is_err());
+    }
+
+    fn tiny_png(width: u32, height: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // signature
+        b.extend(13u32.to_be_bytes()); // IHDR length
+        b.extend(b"IHDR");
+        b.extend(width.to_be_bytes());
+        b.extend(height.to_be_bytes());
+        b.extend([8, 2, 0, 0, 0]); // bit depth, colour type, compression, filter, interlace
+        b.extend(0u32.to_be_bytes()); // CRC (never checked)
+        b
+    }
+
+    #[test]
+    fn reads_png_dimensions_from_the_ihdr_chunk() {
+        let bytes = tiny_png(1920, 1080);
+        let mut c = Cursor::new(bytes);
+        assert_eq!(dimensions(&mut c), Ok((1920, 1080)));
+    }
+
+    #[test]
+    fn truncated_png_is_an_error_not_a_panic() {
+        let mut c = Cursor::new(vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13]);
+        assert!(dimensions(&mut c).is_err());
+    }
+
+    #[test]
+    fn png_reporting_a_zero_dimension_is_an_error_not_a_panic() {
+        let bytes = tiny_png(0, 1080);
+        let mut c = Cursor::new(bytes);
         assert!(dimensions(&mut c).is_err());
     }
 }

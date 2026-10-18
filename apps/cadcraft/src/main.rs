@@ -127,19 +127,28 @@ pub fn install_io() {
 }
 
 fn services() -> Services {
+    use cadcraft_ui_egui::{DRAWING_FILTERS, FileFilter};
     Services {
-        pick_open: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
-                .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
+        pick_open: Some(Box::new(|filters: &[FileFilter]| {
+            let filters = if filters.is_empty() { DRAWING_FILTERS } else { filters };
+            filters
+                .iter()
+                .fold(rfd::FileDialog::new(), |d, (label, exts)| d.add_filter(i18n::t(label), exts))
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
-        pick_save: Some(Box::new(|name: &str| {
-            filters_for_save(name)
+        pick_save: Some(Box::new(|name: &str, filters: &[FileFilter]| {
+            if filters.is_empty() {
+                return filters_for_save(name)
+                    .iter()
+                    .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, ext)| d.add_filter(i18n::t(label), &[*ext]))
+                    .save_file()
+                    .map(|p| p.to_string_lossy().to_string());
+            }
+            filters
                 .iter()
-                .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, ext)| d.add_filter(i18n::t(label), &[*ext]))
+                .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, exts)| d.add_filter(i18n::t(label), exts))
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),

@@ -13,8 +13,12 @@
 //! **Image import, stated plainly**: dimensions are read from the file's header only
 //! (`cadcraft_io::image_header`) - the pixel data itself is never loaded into memory, so this
 //! works the same whether the file is a few kilobytes or (as the surveyor's own aerial photos
-//! often are) close to a gigabyte. JPEG and TIFF are the two formats read; anything else is
+//! often are) close to a gigabyte. JPEG, TIFF and PNG are the formats read; anything else is
 //! reported, not guessed at.
+//!
+//! The vector renderer only ever draws a raster image as its clip-boundary rectangle (never its
+//! pixels - it is a line renderer, not a compositor), so `plan.image_show` reads the actual file
+//! back for the selected image(s) and lets the UI put it in a preview window instead.
 
 use cadcraft_doc::{EntityKind, Image};
 use cadcraft_geom::Vec2;
@@ -50,9 +54,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("plan.import_image", "Import Image (Worldfile)", run_import_image)
             .menu(&["Plan", "Image", "Import Image (Worldfile)"])
             .params(
-                "{path: string (.jpg/.jpeg or .tif/.tiff), worldfile?: string (default: same path with \
-                 its extension's worldfile suffix - .jgw for .jpg, .tfw for .tif)} → {width, height, insert: [x,y]}",
+                "{path: string (.jpg/.jpeg, .tif/.tiff or .png), worldfile?: string (default: same path \
+                 with its extension's worldfile suffix - .jgw for .jpg, .tfw for .tif, .pgw for .png)} \
+                 → {width, height, insert: [x,y]}",
             ),
+        // No menu entry: the canvas's right-click menu is the only way in (the UI opens a
+        // preview window instead of running this; see `context_menu.rs`'s `object_commands`).
+        // A script or MCP call still gets the plain data back.
+        CommandSpec::new("plan.image_show", "Show Image", run_image_show)
+            .params("{handles?: [string] (default: the current selection)} → {images: [{handle, path}]}; errs if none of the targets is an IMAGE"),
     ]
 }
 
@@ -215,8 +225,29 @@ fn worldfile_suffix_for(path: &std::path::Path) -> Option<&'static str> {
     match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("jpg") | Some("jpeg") => Some("jgw"),
         Some("tif") | Some("tiff") => Some("tfw"),
+        Some("png") => Some("pgw"),
         _ => None,
     }
+}
+
+/// The selected IMAGE entities' file paths, for a preview (reads nothing from disk itself - that
+/// is the caller's job, since a cloud session may want to ship bytes rather than a local path).
+fn run_image_show(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "plan.image_show";
+    let hs = targets(s, p)?;
+    let d = s.doc()?;
+    let images: Vec<Value> = hs
+        .iter()
+        .filter_map(|h| d.entity(*h))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Image(i) => Some(json!({ "handle": e.handle.hex(), "path": i.path })),
+            _ => None,
+        })
+        .collect();
+    if images.is_empty() {
+        return Err(bad(CMD, "select a raster image first"));
+    }
+    Ok(json!({ "images": images }))
 }
 
 fn run_import_image(s: &mut Session, p: &Value) -> Result<Value> {
@@ -224,8 +255,8 @@ fn run_import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let path_str = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` (string, the image file) is required"))?;
     let path = std::path::Path::new(path_str);
 
-    let suffix =
-        worldfile_suffix_for(path).ok_or_else(|| bad(CMD, "only JPEG (.jpg/.jpeg + .jgw) and TIFF (.tif/.tiff + .tfw) are supported for now"))?;
+    let suffix = worldfile_suffix_for(path)
+        .ok_or_else(|| bad(CMD, "only JPEG (.jpg/.jpeg + .jgw), TIFF (.tif/.tiff + .tfw) and PNG (.png + .pgw) are supported for now"))?;
     let worldfile_path = match str_param(p, "worldfile") {
         Some(w) => std::path::PathBuf::from(w),
         None => path.with_extension(suffix),
@@ -365,6 +396,52 @@ mod tests {
 
         let _ = std::fs::remove_file(&img_path);
         let _ = std::fs::remove_file(&wf_path);
+    }
+
+    #[test]
+    fn import_image_places_a_png_from_its_pgw_worldfile() {
+        let mut s = session_with_doc();
+        // 3x2 pixel PNG: signature, then a 13-byte IHDR (width, height, depth, colour type,
+        // compression, filter, interlace), then a (never-checked) CRC.
+        let mut png = Vec::new();
+        png.extend([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        png.extend(13u32.to_be_bytes());
+        png.extend(b"IHDR");
+        png.extend(3u32.to_be_bytes());
+        png.extend(2u32.to_be_bytes());
+        png.extend([8, 2, 0, 0, 0]);
+        png.extend(0u32.to_be_bytes());
+
+        let img_path = write_temp("img.png", &png);
+        let wf_path = img_path.with_extension("pgw");
+        std::fs::write(&wf_path, "1.0\n0\n0\n-1.0\n100.0\n200.0\n").expect("writing the worldfile should succeed");
+
+        let out = s.execute("plan.import_image", &json!({ "path": img_path.to_string_lossy() })).expect("should succeed");
+        assert_eq!(out["width"].as_u64(), Some(3));
+        assert_eq!(out["height"].as_u64(), Some(2));
+
+        let _ = std::fs::remove_file(&img_path);
+        let _ = std::fs::remove_file(&wf_path);
+    }
+
+    #[test]
+    fn image_show_reports_the_selected_images_paths() {
+        let mut s = session_with_doc();
+        let img = super::Image { path: "aerial.tif".into(), ..Default::default() };
+        let h = s.add_entity(super::EntityKind::Image(img)).expect("should insert an image");
+        s.execute("pline", &json!({ "vertices": [[0.0, 0.0], [1.0, 0.0]] })).expect("should insert a line too");
+
+        let out = s.execute("plan.image_show", &json!({ "handles": [h.hex()] })).expect("should succeed");
+        assert_eq!(out["images"].as_array().map(Vec::len), Some(1));
+        assert_eq!(out["images"][0]["path"].as_str(), Some("aerial.tif"));
+    }
+
+    #[test]
+    fn image_show_rejects_a_selection_with_no_image_in_it() {
+        let mut s = session_with_doc();
+        let h = s.execute("pline", &json!({ "vertices": [[0.0, 0.0], [1.0, 0.0]] })).expect("should insert a line");
+        let h = h["handle"].as_str().unwrap_or_default().to_string();
+        assert!(s.execute("plan.image_show", &json!({ "handles": [h] })).is_err());
     }
 
     #[test]

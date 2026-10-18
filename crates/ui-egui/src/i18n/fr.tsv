@@ -198,6 +198,12 @@
 	Drawing Limits	Limites du dessin
 	Drawing Utilities	Utilitaires de dessin
 	Drawings (DWG, DXF)	Dessins (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	Dessins SVG (SVG, SVGZ)
+	Shapefiles (SHP)	Fichiers Shapefile (SHP)
+	Images (JPEG, TIFF, PNG)	Images (JPEG, TIFF, PNG)
+	Survey carnets (GSI)	Carnets topo (GSI)
+	Point lists (CSV)	Listes de points (CSV)
+	EDIGEO sheets (VEC)	Feuilles EDIGEO (VEC)
 	Dynamic Dimensions	Cotations dynamiques
 	Dynamic Input	Saisie dynamique
 	Dynamic Input (F12)	Saisie dynamique (F12)
@@ -522,6 +528,7 @@
 	Perpendicular	Perpendiculaire
 	Plot	Tracer
 	Plot (click: do not plot)	Tracer (cliquer : ne pas tracer)
+	Image Preview	Aperçu de l'image
 	Plot Preview	Aperçu du tracé
 	Plot style	Style de tracé
 	Plot style attached to	Style de tracé associé à
@@ -726,6 +733,7 @@
 	Show All	Afficher tout
 	Show All Constraint Bars	Afficher toutes les barres de contrainte
 	Show All Dynamic Dimensions	Afficher toutes les cotes dynamiques
+	Show Image	Afficher l'image
 	Show Layer List	Afficher la liste des calques
 	Show/Hide Lineweight	Afficher/Masquer l'épaisseur des lignes
 	Show/Hide Transparency	Afficher/Masquer la transparence

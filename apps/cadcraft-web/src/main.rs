@@ -69,7 +69,7 @@ mod web {
     /// No file picker on the web: Save / Save As from the menu (and the close prompt) download the
     /// drawing under its current name; `saveas {"path": "name.dxf"}` picks another name.
     fn services() -> Services {
-        Services { pick_save: Some(Box::new(|name: &str| Some(name.to_string()))), ..Services::default() }
+        Services { pick_save: Some(Box::new(|name: &str, _filters| Some(name.to_string()))), ..Services::default() }
     }
 
     pub fn start() {
@@ -142,7 +142,7 @@ mod web {
                         // chosen file in the background (`upload.rs`), so the picker returns none.
                         let inbox = crate::upload::Inbox::new(&cc.egui_ctx);
                         let picker = inbox.clone();
-                        app.services.pick_open = Some(Box::new(move || {
+                        app.services.pick_open = Some(Box::new(move |_filters| {
                             picker.pick();
                             None
                         }));

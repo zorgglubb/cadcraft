@@ -166,7 +166,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
         }
         "ui.open" | "open" if no_path => {
-            let picked = app.services.pick_open.as_ref().and_then(|f| f());
+            let picked = app.services.pick_open.as_ref().and_then(|f| f(crate::DRAWING_FILTERS));
             if let Some(p) = picked {
                 app.open_path(&p);
             }
@@ -174,7 +174,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         // Pick a template (.dwt or .dxf) and start a new drawing from it.
         "ui.newtemplate" => {
-            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f(crate::DRAWING_FILTERS)) {
                 return Some(app.session.execute("new", &json!({ "template": p })).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
@@ -182,7 +182,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // RECOVER from the menu or typed: pick the file. Without a picker the engine asks for the
         // file name on the command line.
         "recover" if no_path && app.services.pick_open.is_some() => {
-            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f(crate::DRAWING_FILTERS)) {
                 let r = app.run("recover", json!({ "path": p }));
                 app.opened(r);
             }
@@ -191,7 +191,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.saveas" | "saveas" if no_path => {
             let title = app.session.state().map(|s| s.title.clone()).ok();
             let name = app.ui.save_format.suggested_name(title.as_deref());
-            if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
+            if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name, &[])) {
                 return Some(app.session.execute("saveas", &saveas_params(&app.ui, &app.session, &p)).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
@@ -204,7 +204,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             let pick = app.services.pick_save.as_ref()?;
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
-            let Some(path) = pick(&format!("{}.pdf", stem.unwrap_or_else(|| "Drawing".into()))) else { return Some(Ok(Value::Null)) };
+            let Some(path) = pick(&format!("{}.pdf", stem.unwrap_or_else(|| "Drawing".into())), &[]) else { return Some(Ok(Value::Null)) };
             let r = app.session.execute("exportpdf", &json!({ "path": path })).map_err(|e| e.to_string());
             app.session.echo(match &r {
                 Ok(_) => format!("Plotted to {path}"),
@@ -244,26 +244,57 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         // Topo/Plan commands that take a file but have no interactive prompt sequence of their
         // own: from a menu (no parameters) ask for the file through the same picker OPEN/IMPORT
-        // use; a JSON call (script, control channel, MCP) always carries `path` and never gets
-        // here. Without a picker service (a headless build), this falls through unhandled and
-        // the engine reports the ordinary "`path` is required" error.
+        // use, narrowed to the format each command actually reads; a JSON call (script, control
+        // channel, MCP) always carries `path` and never gets here. Without a picker service (a
+        // headless build), this falls through unhandled and the engine reports the ordinary
+        // "`path` is required" error. A successful import brings the new geometry into view, the
+        // same way opening a drawing does.
         "topo.import_gsi" | "topo.import_points" | "plan.import_shp" | "plan.import_image" if no_path => {
             let pick = app.services.pick_open.as_ref()?;
-            let Some(path) = pick() else { return Some(Ok(Value::Null)) };
-            app.run(id, json!({ "path": path }))
+            let filters = match id {
+                "topo.import_gsi" => crate::GSI_FILTERS,
+                "topo.import_points" => crate::POINTS_FILTERS,
+                "plan.import_shp" => crate::SHP_FILTERS,
+                _ => crate::IMAGE_FILTERS,
+            };
+            let Some(path) = pick(filters) else { return Some(Ok(Value::Null)) };
+            let r = app.run(id, json!({ "path": path }));
+            if r.is_ok() {
+                app.canvas.zoom_pending = true;
+            }
+            r
         }
         // One file at a time for now - EDIGEO parcels often span several `.VEC` files, but
         // there is no multi-select picker service yet (a further increment).
         "topo.import_edigeo" if no_path => {
             let pick = app.services.pick_open.as_ref()?;
-            let Some(path) = pick() else { return Some(Ok(Value::Null)) };
-            app.run(id, json!({ "paths": [path] }))
+            let Some(path) = pick(crate::EDIGEO_FILTERS) else { return Some(Ok(Value::Null)) };
+            let r = app.run(id, json!({ "paths": [path] }));
+            if r.is_ok() {
+                app.canvas.zoom_pending = true;
+            }
+            r
+        }
+        // From the canvas's right-click menu: the vector renderer only ever draws an image's
+        // frame, never its pixels, so this opens a window on the real file instead of running
+        // the plain JSON command. A script or MCP call (with `handles` or `path` set) still gets
+        // the plain `{images: [...]}` data back.
+        "plan.image_show" if params.is_null() => {
+            let r = app.run(id, json!({}));
+            if let Ok(v) = &r
+                && let Some(path) = v["images"][0]["path"].as_str()
+            {
+                crate::image_preview::show(app, path);
+            }
+            r
         }
         "plan.export_shp" if no_path => {
             let pick = app.services.pick_save.as_ref()?;
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
-            let Some(path) = pick(&format!("{}.shp", stem.unwrap_or_else(|| "Drawing".into()))) else { return Some(Ok(Value::Null)) };
+            let Some(path) = pick(&format!("{}.shp", stem.unwrap_or_else(|| "Drawing".into())), crate::SHP_FILTERS) else {
+                return Some(Ok(Value::Null));
+            };
             app.run(id, json!({ "path": path }))
         }
         "ui.toggle.statusbar" => {
@@ -732,7 +763,7 @@ mod tests {
         let log = Rc::clone(&asked);
         let services = Services {
             pick_open: None,
-            pick_save: Some(Box::new(move |name: &str| {
+            pick_save: Some(Box::new(move |name: &str, _filters| {
                 log.borrow_mut().push(name.to_string());
                 answer.clone()
             })),
@@ -776,36 +807,48 @@ mod tests {
 
     #[test]
     fn topo_and_plan_file_commands_ask_for_a_file_from_a_menu_but_never_from_json() {
-        let asked = Rc::new(RefCell::new(Vec::new()));
-        let opened = Rc::clone(&asked);
-        let saved = Rc::clone(&asked);
+        let opened: Rc<RefCell<Vec<(String, Vec<String>)>>> = Rc::new(RefCell::new(Vec::new()));
+        let open_log = Rc::clone(&opened);
+        let saved: Rc<RefCell<Vec<(String, Vec<String>)>>> = Rc::new(RefCell::new(Vec::new()));
+        let save_log = Rc::clone(&saved);
         let services = Services {
-            pick_open: Some(Box::new(move || {
-                opened.borrow_mut().push("open".to_string());
+            pick_open: Some(Box::new(move |filters: &[crate::FileFilter]| {
+                open_log.borrow_mut().push(("open".to_string(), filters.iter().flat_map(|(_, exts)| exts.iter().map(|e| e.to_string())).collect()));
                 None // cancelled - no file chosen
             })),
-            pick_save: Some(Box::new(move |name: &str| {
-                saved.borrow_mut().push(name.to_string());
+            pick_save: Some(Box::new(move |name: &str, filters: &[crate::FileFilter]| {
+                save_log.borrow_mut().push((name.to_string(), filters.iter().flat_map(|(_, exts)| exts.iter().map(|e| e.to_string())).collect()));
                 None
             })),
         };
         let mut app = CadApp::new(Session::new(), services);
         app.session.execute("new", &json!({})).expect("new drawing should succeed");
 
-        // From the menu/toolbar (no parameters): each asks for a file rather than erroring.
-        for id in ["topo.import_gsi", "topo.import_points", "topo.import_edigeo", "plan.import_shp", "plan.import_image"] {
+        // From the menu/toolbar (no parameters): each asks for a file narrowed to its own format,
+        // rather than erroring.
+        for (id, ext) in [
+            ("topo.import_gsi", "gsi"),
+            ("topo.import_points", "csv"),
+            ("topo.import_edigeo", "vec"),
+            ("plan.import_shp", "shp"),
+            ("plan.import_image", "png"), // one of several image extensions
+        ] {
             app.start(id);
+            let (_, exts) = opened.borrow().last().cloned().unwrap_or_default();
+            assert!(exts.iter().any(|e| e == ext), "{id}: expected .{ext} among {exts:?}");
         }
-        assert_eq!(asked.borrow().len(), 5);
+        assert_eq!(opened.borrow().len(), 5);
         app.start("plan.export_shp");
-        assert!(asked.borrow().last().is_some_and(|n| n.ends_with(".shp")));
+        let (name, exts) = saved.borrow().last().cloned().unwrap();
+        assert!(name.ends_with(".shp"));
+        assert_eq!(exts, vec!["shp".to_string()]);
 
         // A JSON call (script, control channel, MCP) always carries its own `path` and never
         // opens a dialog - it just reports the ordinary engine error for a bad path.
-        asked.borrow_mut().clear();
+        opened.borrow_mut().clear();
         let r = app.run("plan.import_shp", json!({ "path": "/nonexistent/does-not-exist.shp" }));
         assert!(r.is_err());
-        assert!(asked.borrow().is_empty());
+        assert!(opened.borrow().is_empty());
     }
 
     #[test]

@@ -148,7 +148,9 @@ fn object_commands(app: &CadApp) -> Vec<(&'static str, Option<&'static str>)> {
         EntityKind::Dimension(_) => vec![("dimtedit", None)],
         EntityKind::MLeader(_) => vec![("mleaderedit", None)],
         EntityKind::Viewport(_) => vec![("vpclip", None)],
-        EntityKind::Image(_) => vec![("imageclip", None)],
+        // The vector renderer only ever draws an image's frame, never its pixels, so a selected
+        // raster image gets a way to actually see it.
+        EntityKind::Image(_) => vec![("plan.image_show", Some("Show Image"))],
         _ => Vec::new(),
     }
 }

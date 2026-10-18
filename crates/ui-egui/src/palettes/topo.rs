@@ -113,7 +113,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     section(ui, "Land Records (EDIGEO)", |ui| {
         ui.horizontal_wrapped(|ui| {
             if ui.button(crate::tl!("Add .VEC File…")).clicked()
-                && let Some(path) = app.services.pick_open.as_ref().and_then(|f| f())
+                && let Some(path) = app.services.pick_open.as_ref().and_then(|f| f(crate::EDIGEO_FILTERS))
             {
                 state.edigeo_paths.push(path);
             }

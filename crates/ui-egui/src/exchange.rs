@@ -25,21 +25,21 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
         }
         "import" | "imp" => {
             let Some(pick) = app.services.pick_open.as_ref() else { return no_picker(app, "IMPORT", r#"import {"path": "parts.dxf"}"#) };
-            match pick() {
+            match pick(&[]) {
                 Some(path) => app.run("import", json!({ "path": path })),
                 None => Ok(Value::Null),
             }
         }
         "publish" => {
             let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "PUBLISH", "publish {}") };
-            match pick(&format!("{stem}.pdf")) {
+            match pick(&format!("{stem}.pdf"), &[]) {
                 Some(path) => app.run("publish", json!({ "path": path })),
                 None => Ok(Value::Null),
             }
         }
         _ => {
             let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "EXPORT", r#"export {"format": "svg"}"#) };
-            match pick(&format!("{stem}.svg")) {
+            match pick(&format!("{stem}.svg"), &[]) {
                 Some(path) => app.run("export", json!({ "path": path })),
                 None => Ok(Value::Null),
             }
@@ -168,11 +168,11 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let (a, b) = (asked.clone(), asked.clone());
         let services = Services {
-            pick_open: Some(Box::new(move || {
+            pick_open: Some(Box::new(move |_filters| {
                 a.borrow_mut().push("open".into());
                 None
             })),
-            pick_save: Some(Box::new(move |name: &str| {
+            pick_save: Some(Box::new(move |name: &str, _filters| {
                 b.borrow_mut().push(name.to_string());
                 None
             })),

@@ -33,6 +33,7 @@ pub mod gpu;
 pub mod grip_dyn;
 pub mod i18n;
 pub mod icons;
+pub mod image_preview;
 pub mod layers;
 pub mod managers;
 pub mod menus;
@@ -95,6 +96,9 @@ pub struct UiState {
     pub in_window_menu: bool,
     pub start_tab: bool,
     pub dialog: Option<String>,
+    /// The file `image_preview::dialog` is showing, set by `plan.image_show`'s right-click
+    /// handler (`crate::image_preview::show`) just before it opens `dialog = Some("imagepreview")`.
+    pub image_preview_path: Option<String>,
     pub history_lines: usize,
     /// Interface theme: "system" (follow the OS light/dark appearance), "light" or "dark".
     pub theme: theme::ThemePref,
@@ -173,6 +177,7 @@ impl Default for UiState {
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
             dialog: None,
+            image_preview_path: None,
             history_lines: 3,
             theme: theme::ThemePref::default(),
             animations: animation::AnimationPref::default(),
@@ -183,11 +188,33 @@ impl Default for UiState {
     }
 }
 
+/// A labelled set of file extensions for a file-picker filter: an i18n key for the label, then
+/// the extensions it matches (without their leading dot).
+pub type FileFilter = (&'static str, &'static [&'static str]);
+
+/// The default OPEN/SAVE filter: CADCraft's own drawing formats plus SVG. Used by OPEN, the
+/// template picker, RECOVER, XATTACH and loading a `.lin` library - everything that reads or
+/// writes a drawing or block source rather than a specific exchange format.
+pub const DRAWING_FILTERS: &[FileFilter] = &[("Drawings (DWG, DXF)", &["dwg", "dxf", "dwt"]), ("SVG drawings (SVG, SVGZ)", &["svg", "svgz"])];
+/// Shapefiles (`PLAN.IMPORT_SHP` / `PLAN.EXPORT_SHP`).
+pub const SHP_FILTERS: &[FileFilter] = &[("Shapefiles (SHP)", &["shp"])];
+/// Georeferenced raster images (`PLAN.IMPORT_IMAGE`): each needs its matching worldfile
+/// (`.jgw`/`.tfw`/`.pgw`) next to it.
+pub const IMAGE_FILTERS: &[FileFilter] = &[("Images (JPEG, TIFF, PNG)", &["jpg", "jpeg", "tif", "tiff", "png"])];
+/// Leica/Geo GSI survey carnets (`TOPO.IMPORT_GSI`).
+pub const GSI_FILTERS: &[FileFilter] = &[("Survey carnets (GSI)", &["gsi"])];
+/// Point lists (`TOPO.IMPORT_POINTS`): a plain CSV file, one point per line.
+pub const POINTS_FILTERS: &[FileFilter] = &[("Point lists (CSV)", &["csv"])];
+/// EDIGEO cadastral exchange sheets (`TOPO.IMPORT_EDIGEO`): one `.VEC` file per parcel sheet.
+pub const EDIGEO_FILTERS: &[FileFilter] = &[("EDIGEO sheets (VEC)", &["vec"])];
+
 /// Host services (file pickers, clipboard) injected by the app so this crate stays portable.
+/// `filters` narrows the dialog to the file types the caller actually wants; an empty slice
+/// leaves the host's own default filters (every drawing and exchange format).
 #[derive(Default)]
 pub struct Services {
-    pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
-    pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    pub pick_open: Option<Box<dyn Fn(&[FileFilter]) -> Option<String>>>,
+    pub pick_save: Option<Box<dyn Fn(&str, &[FileFilter]) -> Option<String>>>,
 }
 
 pub struct CadApp {

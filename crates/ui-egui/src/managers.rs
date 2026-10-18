@@ -130,7 +130,7 @@ fn linetype(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 if let Some(pick) = app.services.pick_open.as_ref() {
                     ui.separator();
                     if ui.selectable_label(false, "From File...").clicked()
-                        && let Some(path) = pick()
+                        && let Some(path) = pick(crate::DRAWING_FILTERS)
                     {
                         action = Some(("linetype", json!({ "load": "*", "file": path })));
                     }
@@ -1034,7 +1034,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
             let suggested = format!("{}-{}.{ext}", stem.unwrap_or_else(|| "Drawing".into()), st.target);
             // Cancelling the file dialog keeps the Plot dialog open with its settings.
-            let Some(path) = pick(&suggested) else { return action };
+            let Some(path) = pick(&suggested, &[]) else { return action };
             if let Some(o) = params.as_object_mut() {
                 o.insert("path".into(), json!(path));
             }
