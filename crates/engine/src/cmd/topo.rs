@@ -2,8 +2,13 @@
 //! references (zero value, *VO*) and computing new points from polar observations
 //! (*rayonnement*), inserting the results directly into the active document as POINT
 //! entities (with an optional TEXT label carrying each point's code).
+//!
+//! The file-import commands ([`run_import_gsi`], [`run_import_points`]) go one step further:
+//! each imported point becomes a [`CADCRAFT_TCPOINT`](TCPOINT_BLOCK) block reference carrying its
+//! matricule/id, altitude and code as MAT/ALT/COD attributes - real entity data that survives in
+//! the drawing and shows up in Properties - rather than a bare POINT plus a loose text label.
 
-use cadcraft_doc::{EntityKind, HAlign, Point, VAlign};
+use cadcraft_doc::{EntityKind, HAlign, Handle, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
 use cadcraft_topo_calc::{RadiationObservation, ReferenceObservation, radiation, zero_value};
 use cadcraft_topo_io::{csv_points, gsi};
@@ -28,13 +33,18 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{station: [x,y,z], references: [{point: [x,y,z], hzReading: gon}]}"),
         CommandSpec::new("topo.import_gsi", "Import GSI Carnet", run_import_gsi).menu(&["Topo Calculations", "Import", "GSI Carnet"]).params(
             "{path: string, station?: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
-                 label?: bool, textHeight?: number} - station/vo (or references) are required only if the \
+                 label?: bool} - station/vo (or references) are required only if the \
                  carnet has angle+distance shots with no ready-made coordinates; a coordinate-only carnet \
-                 (WI 81/82/83) imports with neither",
+                 (WI 81/82/83) imports with neither. Each point becomes a CADCRAFT_TCPOINT block reference \
+                 with its id/matricule, altitude and code as MAT/ALT/COD attributes (`label: false` hides \
+                 the visible code text; the attributes themselves are kept either way).",
         ),
         CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)", run_import_points)
             .menu(&["Topo Calculations", "Import", "Points CSV/TXT"])
-            .params("{path: string, label?: bool, textHeight?: number}"),
+            .params(
+                "{path: string, label?: bool} - each point becomes a CADCRAFT_TCPOINT block reference with \
+                 its id/matricule, altitude and code as MAT/ALT/COD attributes.",
+            ),
     ]
 }
 
@@ -99,6 +109,89 @@ pub(crate) fn insert_point(s: &mut Session, coord: Vec3, code: Option<String>, l
     }))
 }
 
+/// Block name for imported topo points, prefixed to avoid colliding with a user's own block of
+/// the same short name (matches the convention in `topo_symbols.rs`).
+pub(crate) const TCPOINT_BLOCK: &str = "CADCRAFT_TCPOINT";
+
+/// Pulls a result's `"handle"` (single) or `"handles"` (array) field into `out` - same helper as
+/// `topo_symbols.rs`'s `collect_handles`, duplicated locally to avoid a cross-module dependency
+/// for one tiny function.
+fn collect_handles(out: &mut Vec<Value>, result: &Value) {
+    match result.get("handles").and_then(Value::as_array) {
+        Some(hs) => out.extend(hs.iter().cloned()),
+        None => {
+            if let Some(h) = result.get("handle") {
+                out.push(h.clone());
+            }
+        }
+    }
+}
+
+/// Builds the CADCRAFT_TCPOINT block the first time it's needed: a small cross inside a circle,
+/// plus COD (visible), MAT and ALT (invisible by default - still real attribute data, just not
+/// cluttering the drawing) attribute definitions.
+fn ensure_tcpoint_block(s: &mut Session) -> Result<()> {
+    if s.doc()?.blocks.keys().any(|k| k.eq_ignore_ascii_case(TCPOINT_BLOCK)) {
+        return Ok(());
+    }
+    let mut handles: Vec<Value> = Vec::new();
+    let mut draw = |s: &mut Session, cmd: &str, params: Value| -> Result<()> {
+        let r = s.execute(cmd, &params)?;
+        collect_handles(&mut handles, &r);
+        Ok(())
+    };
+    draw(s, "circle", json!({ "center": [0.0, 0.0], "radius": 0.2 }))?;
+    draw(s, "line", json!({ "points": [[-0.3, 0.0], [0.3, 0.0]] }))?;
+    draw(s, "line", json!({ "points": [[0.0, -0.3], [0.0, 0.3]] }))?;
+    draw(s, "attdef", json!({ "tag": "COD", "prompt": "Code", "default": "", "at": [0.4, 0.1], "height": 0.15 }))?;
+    draw(s, "attdef", json!({ "tag": "MAT", "prompt": "Matricule", "default": "", "at": [0.4, -0.15], "height": 0.15, "invisible": true }))?;
+    draw(s, "attdef", json!({ "tag": "ALT", "prompt": "Altitude", "default": "", "at": [0.4, -0.4], "height": 0.15, "invisible": true }))?;
+    s.execute("block", &json!({ "name": TCPOINT_BLOCK, "base": [0.0, 0.0], "handles": handles, "keep": "delete" }))?;
+    Ok(())
+}
+
+/// Inserts one imported topo point as a CADCRAFT_TCPOINT block reference carrying its matricule
+/// (`mat` - the point's own id/number from the source file), altitude (`coord.z`) and code as
+/// MAT/ALT/COD attributes, so every field survives as real entity data - visible and editable in
+/// Properties - instead of the plain POINT + loose text label [`insert_point`] uses. Mirrors
+/// `insert_point`'s JSON result shape so callers' `points` arrays don't have to change; `mat` is
+/// added alongside the existing fields.
+pub(crate) fn insert_tcpoint(s: &mut Session, coord: Vec3, mat: Option<String>, code: Option<String>, label: bool) -> Result<Value> {
+    ensure_tcpoint_block(s)?;
+
+    let mut attribs = serde_json::Map::new();
+    if let Some(c) = &code {
+        attribs.insert("COD".into(), Value::String(c.clone()));
+    }
+    if let Some(m) = &mat {
+        attribs.insert("MAT".into(), Value::String(m.clone()));
+    }
+    attribs.insert("ALT".into(), Value::String(format!("{:.3}", coord.z)));
+
+    let out = s.execute("insert", &json!({ "name": TCPOINT_BLOCK, "at": [coord.x, coord.y], "attribs": Value::Object(attribs) }))?;
+    let handle = out.get("handle").and_then(Value::as_str).map(str::to_string);
+
+    // COD is visible by default (matching the old label's behaviour); `label: false` hides it,
+    // but MAT/ALT stay in the entity's data either way - this only affects what's drawn.
+    if !label && let Some(hd) = handle.as_deref().and_then(Handle::parse_hex) {
+        let _ = s.doc_mut()?.modify_entity(hd, |e| {
+            if let EntityKind::Insert(ins) = &mut e.kind
+                && let Some(a) = ins.attribs.iter_mut().find(|a| a.tag == "COD")
+            {
+                a.invisible = true;
+            }
+        });
+    }
+
+    Ok(json!({
+        "handle": handle,
+        "x": coord.x, "y": coord.y, "z": coord.z,
+        "code": code,
+        "mat": mat,
+        "labelHandle": Value::Null,
+    }))
+}
+
 fn run_zero_value(_s: &mut Session, p: &Value) -> Result<Value> {
     let station = vec3_req("topo.zero_value", p, "station")?;
     let refs = references_param("topo.zero_value", p, "references")?;
@@ -144,7 +237,6 @@ fn run_radiation(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("topo.import_gsi", "`path` is required"))?;
     let label = bool_or(p, "label", true);
-    let text_height = f64_or(p, "textHeight", s.doc()?.header.f64("TEXTSIZE", 0.2));
 
     let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_gsi", format!("{path}: {e}")))?;
     let import = gsi::parse(&text);
@@ -179,7 +271,7 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
                 radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.import_gsi", e))?
             }
         };
-        points.push(insert_point(s, coord, code, label, text_height)?);
+        points.push(insert_tcpoint(s, coord, Some(gp.id.clone()), code, label)?);
     }
 
     Ok(json!({
@@ -198,7 +290,6 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("topo.import_points", "`path` is required"))?;
     let label = bool_or(p, "label", true);
-    let text_height = f64_or(p, "textHeight", s.doc()?.header.f64("TEXTSIZE", 0.2));
 
     let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_points", format!("{path}: {e}")))?;
     let import = csv_points::parse(&text);
@@ -207,7 +298,7 @@ fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
     for cp in &import.points {
         let coord = Vec3::new(cp.x, cp.y, cp.z.unwrap_or(0.0));
         let code = cp.code.clone().or_else(|| Some(cp.id.clone()));
-        points.push(insert_point(s, coord, code, label, text_height)?);
+        points.push(insert_tcpoint(s, coord, Some(cp.id.clone()), code, label)?);
     }
 
     Ok(json!({
@@ -382,6 +473,50 @@ mod tests {
         let pts = out["points"].as_array().expect("points array");
         assert_eq!(pts[0]["code"].as_str(), Some("P1"));
         assert!((pts[1]["x"].as_f64().unwrap_or(f64::NAN) - 110.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn import_points_inserts_a_tcpoint_block_with_mat_alt_cod_attributes() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-test-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;100.0;200.0;12.5;BORNE\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        let pts = out["points"].as_array().expect("points array");
+        assert_eq!(pts[0]["mat"].as_str(), Some("P1"));
+
+        assert!(s.doc().expect("doc").blocks.keys().any(|k| k.eq_ignore_ascii_case(super::TCPOINT_BLOCK)), "the TCPOINT block should now exist");
+        let handle = super::Handle::parse_hex(pts[0]["handle"].as_str().expect("handle")).expect("valid handle");
+        let doc = s.doc().expect("doc");
+        let e = doc.entity(handle).expect("entity");
+        let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity, got {:?}", e.kind) };
+        assert_eq!(ins.block, super::TCPOINT_BLOCK);
+        let tag = |t: &str| ins.attribs.iter().find(|a| a.tag == t).map(|a| a.text.value.clone());
+        assert_eq!(tag("MAT"), Some("P1".to_string()));
+        assert_eq!(tag("COD"), Some("BORNE".to_string()));
+        assert_eq!(tag("ALT"), Some("12.500".to_string()));
+    }
+
+    #[test]
+    fn import_points_with_label_false_hides_the_code_but_keeps_the_attributes() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-nolabel-test-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;0.0;BORNE\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy(), "label": false }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        let pts = out["points"].as_array().expect("points array");
+
+        let handle = super::Handle::parse_hex(pts[0]["handle"].as_str().expect("handle")).expect("valid handle");
+        let doc = s.doc().expect("doc");
+        let e = doc.entity(handle).expect("entity");
+        let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity, got {:?}", e.kind) };
+        let cod = ins.attribs.iter().find(|a| a.tag == "COD").expect("COD attribute should still be attached");
+        assert!(cod.invisible, "label: false should hide the code text");
+        assert_eq!(cod.text.value, "BORNE", "but the value itself should be kept");
     }
 
     #[test]

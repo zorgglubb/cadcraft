@@ -1401,6 +1401,9 @@
 	Import/Export	Імпорт/Експорт
 	Import Shapefile (SHP)	Імпорт Shapefile (SHP)
 	Export Shapefile (SHP)	Експорт Shapefile (SHP)
+	Set Shapefile Attribute	Встановити атрибут Shapefile
+	Attributes	Атрибути
+	Block Attributes	Атрибути блока
 	Coordinate System	Система координат
 	Assign Coordinate System	Призначити систему координат
 	Current Coordinate System	Поточна система координат

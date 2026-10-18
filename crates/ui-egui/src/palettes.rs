@@ -845,6 +845,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<Value> = None;
     let mut custom_set: Option<Value> = None;
+    let mut attrib_set: Option<Value> = None;
+    let mut shp_attr_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1094,8 +1096,36 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         });
                     }
                 }
+                // Block ATTRIB instances (CODE/ALT/MAT on a CADCRAFT_TCPOINT survey point,
+                // or any other block's own attributes) - distinct from the dynamic-block
+                // "Custom" properties above, which come from constraints, not ATTDEF text.
+                if !i.attribs.is_empty() {
+                    group(ui, "Block Attributes");
+                    for a in &i.attribs {
+                        prop_row(ui, &a.tag, |ui| {
+                            if let Some(v) = edit_field(ui, ui.id().with(("attrib", e.handle, &a.tag)), a.text.value.clone()) {
+                                let mut values = serde_json::Map::new();
+                                values.insert(a.tag.clone(), Value::String(v));
+                                attrib_set = Some(json!({ "handle": e.handle.hex(), "values": Value::Object(values) }));
+                            }
+                        });
+                    }
+                }
             }
             _ => {}
+        }
+        // A Shapefile-imported entity's DBF fields (any entity kind - `plan.import_shp` can tag
+        // a POINT/LWPOLYLINE either way), shown and editable the same way as any other property.
+        if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(&e, cadcraft_doc::import_attrs::SHP_APPID) {
+            group(ui, "Attributes");
+            prop_row(ui, "Table", |ui| read_only(ui, &table));
+            for (k, v) in &fields {
+                prop_row(ui, k, |ui| {
+                    if let Some(nv) = edit_field(ui, ui.id().with(("shpattr", e.handle, k)), v.clone()) {
+                        shp_attr_set = Some(json!({ "handle": e.handle.hex(), "key": k, "value": nv }));
+                    }
+                });
+            }
         }
     }
     if let Some(p) = set {
@@ -1104,5 +1134,11 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     report_bad(app, bad);
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
+    }
+    if let Some(p) = attrib_set {
+        let _ = app.run("attedit", p);
+    }
+    if let Some(p) = shp_attr_set {
+        let _ = app.run("plan.set_shp_attribute", p);
     }
 }

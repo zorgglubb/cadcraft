@@ -38,12 +38,22 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("plan.import_shp", "Import Shapefile (SHP)", run_import_shp)
             .menu(&["Plan", "Import/Export", "Import Shapefile (SHP)"])
-            .params("{path: string (.shp; a .dbf next to it is read for attributes), layer?: string} → {imported, skipped}"),
+            .params(
+                "{path: string (.shp; a .dbf next to it is read for attributes), layer?: string} → {imported, skipped}. \
+                 Each feature's DBF fields (and the .shp file's own name, standing in for a table name) are \
+                 kept on the entity as XDATA - visible in Properties and carried over if re-exported.",
+            ),
         CommandSpec::new("plan.export_shp", "Export Shapefile (SHP)", run_export_shp)
             .menu(&["Plan", "Import/Export", "Export Shapefile (SHP)"])
             .params(
-                "{path: string (.shp; .shx/.dbf are written alongside it), handles?: [string] (default: every LWPOLYLINE/LINE/POINT in model space)} → {written, skipped}",
+                "{path: string (.shp; .shx/.dbf are written alongside it), handles?: [string] (default: every LWPOLYLINE/LINE/POINT in model space)} \
+                 → {written, skipped}. An entity's fields from a previous plan.import_shp are written back to the DBF; \
+                 an entity with none exports with an empty attribute row (the DBF's columns come from the first feature).",
             ),
+        // No menu entry: the Properties palette's own "Attributes" section is the only way in -
+        // editing one DBF field an imported Shapefile entity carries, from `plan.import_shp`.
+        CommandSpec::new("plan.set_shp_attribute", "Set Shapefile Attribute", run_set_shp_attribute)
+            .params("{handle: string, key: string, value: string} → {changed: bool}; errs if the entity carries no Shapefile attributes at all"),
         CommandSpec::new("plan.set_crs", "Assign Coordinate System", run_set_crs)
             .menu(&["Plan", "Coordinate System", "Assign Coordinate System"])
             .params(
@@ -96,6 +106,9 @@ fn run_import_shp(s: &mut Session, p: &Value) -> Result<Value> {
     let dbf_bytes = std::fs::read(&dbf_path).ok();
 
     let import = shp::read(&shp_bytes, dbf_bytes.as_deref()).map_err(|e| bad(CMD, e.to_string()))?;
+    // The Shapefile format has no table name of its own (one table per file), so the .shp file's
+    // own stem stands in for one - shown in Properties alongside the fields it names.
+    let table = std::path::Path::new(path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("shapefile").to_string();
 
     let mut imported = 0usize;
     for feature in &import.features {
@@ -106,7 +119,7 @@ fn run_import_shp(s: &mut Session, p: &Value) -> Result<Value> {
             set_layer(s, h, &layer)?;
         }
         if !feature.attributes.is_empty() {
-            attach_attributes(s, h, &feature.attributes)?;
+            attach_attributes(s, h, &table, &feature.attributes)?;
         }
         imported += 1;
     }
@@ -139,14 +152,36 @@ fn set_layer(s: &mut Session, h: cadcraft_doc::Handle, layer: &str) -> Result<()
     s.doc_mut()?.modify_entity(h, move |e| e.common.layer = layer).map_err(|e| bad("plan.import_shp", e.to_string()))
 }
 
-fn attach_attributes(s: &mut Session, h: cadcraft_doc::Handle, attrs: &[(String, String)]) -> Result<()> {
-    use cadcraft_doc::RawTag;
-    const APPID: &str = "CADCRAFT_SHP";
-    let mut xdata = vec![RawTag { code: 1001, value: APPID.to_string() }];
-    for (k, v) in attrs {
-        xdata.push(RawTag { code: 1000, value: format!("{k}={v}") });
-    }
+/// Tags `h` with its source DBF `table` name and `attrs` (field name/value pairs) as XDATA (the
+/// `cadcraft_doc::import_attrs` convention), so they survive as real entity data - read back by
+/// [`shp_attributes`] for display (Properties) and for re-export.
+fn attach_attributes(s: &mut Session, h: cadcraft_doc::Handle, table: &str, attrs: &[(String, String)]) -> Result<()> {
+    let xdata = cadcraft_doc::import_attrs::tag_fields(cadcraft_doc::import_attrs::SHP_APPID, table, attrs);
     s.doc_mut()?.modify_entity(h, move |e| e.common.xdata = xdata).map_err(|e| bad("plan.import_shp", e.to_string()))
+}
+
+/// Reads back an entity's Shapefile table name and attribute fields (in file order), if it was
+/// tagged by [`attach_attributes`]. `None` for an entity with no such XDATA. The Properties
+/// palette (`cadcraft-ui-egui`) reads the same data straight from `cadcraft_doc::import_attrs`.
+pub(crate) fn shp_attributes(e: &cadcraft_doc::Entity) -> Option<(String, Vec<(String, String)>)> {
+    cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID)
+}
+
+fn run_set_shp_attribute(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "plan.set_shp_attribute";
+    let h = cadcraft_doc::Handle::parse_hex(str_param(p, "handle").ok_or_else(|| bad(CMD, "`handle` is required"))?)
+        .ok_or_else(|| bad(CMD, "`handle` is not a valid handle"))?;
+    let key = str_param(p, "key").ok_or_else(|| bad(CMD, "`key` is required"))?;
+    let value = str_param(p, "value").ok_or_else(|| bad(CMD, "`value` is required"))?.to_string();
+
+    let (table, mut fields) =
+        s.doc()?.entity(h).and_then(|e| shp_attributes(e)).ok_or_else(|| bad(CMD, "that entity carries no Shapefile attributes"))?;
+    let field = fields.iter_mut().find(|(k, _)| k == key).ok_or_else(|| bad(CMD, format!("no `{key}` field on this entity")))?;
+    field.1 = value;
+
+    let xdata = cadcraft_doc::import_attrs::tag_fields(cadcraft_doc::import_attrs::SHP_APPID, &table, &fields);
+    s.doc_mut()?.modify_entity(h, move |e| e.common.xdata = xdata).map_err(|e| bad(CMD, e.to_string()))?;
+    Ok(json!({ "changed": true }))
 }
 
 fn run_export_shp(s: &mut Session, p: &Value) -> Result<Value> {
@@ -164,6 +199,10 @@ fn run_export_shp(s: &mut Session, p: &Value) -> Result<Value> {
     };
 
     let mut geoms: Vec<shp::Geometry> = Vec::new();
+    // Attribute fields carried over from an entity's own `plan.import_shp`-attached XDATA (see
+    // `shp_attributes`), if any - round-tripping a reimported-then-reexported shapefile's fields
+    // rather than silently dropping them. An entity with none exports with an empty attribute row.
+    let mut attrs: Vec<Vec<(String, String)>> = Vec::new();
     let mut skipped = 0usize;
     for e in &entities {
         let geometry = match &e.kind {
@@ -177,7 +216,10 @@ fn run_export_shp(s: &mut Session, p: &Value) -> Result<Value> {
             _ => None,
         };
         match geometry {
-            Some(g) => geoms.push(g),
+            Some(g) => {
+                geoms.push(g);
+                attrs.push(shp_attributes(e).map(|(_, fields)| fields).unwrap_or_default());
+            }
             None => skipped += 1,
         }
     }
@@ -186,7 +228,7 @@ fn run_export_shp(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "nothing exportable was found (only POINT, LINE and LWPOLYLINE are written to Shapefile)"));
     }
 
-    let features: Vec<shp::OutFeature> = geoms.iter().map(|g| shp::OutFeature { geometry: g, attributes: &[] }).collect();
+    let features: Vec<shp::OutFeature> = geoms.iter().zip(&attrs).map(|(g, a)| shp::OutFeature { geometry: g, attributes: a }).collect();
     let written_skip = shp::write_to_files(std::path::Path::new(path), &features).map_err(|e| bad(CMD, e.to_string()))?;
 
     Ok(json!({ "written": geoms.len() - written_skip, "skipped": skipped + written_skip }))
@@ -429,6 +471,102 @@ mod tests {
         assert_eq!(imp["imported"].as_u64(), Some(1));
 
         for ext in ["shp", "shx", "dbf"] {
+            let _ = std::fs::remove_file(out_path.with_extension(ext));
+        }
+    }
+
+    #[test]
+    fn import_shp_keeps_the_dbf_fields_and_table_name_as_entity_data() {
+        use cadcraft_geom::Vec3;
+        use cadcraft_io::shp;
+
+        let fixture = std::env::temp_dir().join(format!("cadcraft-plan-attrs-{}.shp", std::process::id()));
+        let geom = shp::Geometry::Point(Vec3::new(5.0, 5.0, 0.0));
+        let attrs = [("NOM".to_string(), "Parcelle A".to_string()), ("SURFACE".to_string(), "120.5".to_string())];
+        shp::write_to_files(&fixture, &[shp::OutFeature { geometry: &geom, attributes: &attrs }]).expect("writing the fixture should succeed");
+
+        let mut s = session_with_doc();
+        let imp = s.execute("plan.import_shp", &json!({ "path": fixture.to_string_lossy() })).expect("import should succeed");
+        assert_eq!(imp["imported"].as_u64(), Some(1));
+
+        let doc = s.doc().expect("doc");
+        let e = doc.space(&cadcraft_doc::Space::Model).and_then(|sp| sp.iter().next()).expect("one entity");
+        let (table, fields) = super::shp_attributes(e).expect("the entity should carry its source attributes");
+        assert_eq!(table, fixture.file_stem().and_then(std::ffi::OsStr::to_str).unwrap());
+        assert_eq!(fields, attrs.to_vec());
+
+        for ext in ["shp", "shx", "dbf"] {
+            let _ = std::fs::remove_file(fixture.with_extension(ext));
+        }
+    }
+
+    #[test]
+    fn set_shp_attribute_edits_one_field_and_leaves_the_others_and_the_table_untouched() {
+        use cadcraft_geom::Vec3;
+        use cadcraft_io::shp;
+
+        let fixture = std::env::temp_dir().join(format!("cadcraft-plan-setattr-{}.shp", std::process::id()));
+        let geom = shp::Geometry::Point(Vec3::new(0.0, 0.0, 0.0));
+        let attrs = [("NOM".to_string(), "Parcelle A".to_string()), ("SURFACE".to_string(), "120.5".to_string())];
+        shp::write_to_files(&fixture, &[shp::OutFeature { geometry: &geom, attributes: &attrs }]).expect("writing the fixture should succeed");
+
+        let mut s = session_with_doc();
+        s.execute("plan.import_shp", &json!({ "path": fixture.to_string_lossy() })).expect("import should succeed");
+        for ext in ["shp", "shx", "dbf"] {
+            let _ = std::fs::remove_file(fixture.with_extension(ext));
+        }
+        let handle = {
+            let doc = s.doc().expect("doc");
+            doc.space(&cadcraft_doc::Space::Model).and_then(|sp| sp.iter().next()).expect("one entity").handle
+        };
+
+        let out =
+            s.execute("plan.set_shp_attribute", &json!({ "handle": handle.hex(), "key": "SURFACE", "value": "150.0" })).expect("should succeed");
+        assert_eq!(out["changed"].as_bool(), Some(true));
+
+        let doc = s.doc().expect("doc");
+        let e = doc.entity(handle).expect("entity");
+        let (table, fields) = super::shp_attributes(e).expect("attributes should still be there");
+        assert!(!table.is_empty());
+        assert_eq!(fields, vec![("NOM".to_string(), "Parcelle A".to_string()), ("SURFACE".to_string(), "150.0".to_string())]);
+    }
+
+    #[test]
+    fn set_shp_attribute_rejects_an_entity_with_no_attributes_or_an_unknown_key() {
+        let mut s = session_with_doc();
+        let out = s.execute("pline", &json!({ "vertices": [[0.0, 0.0], [10.0, 0.0]] })).expect("should insert a line");
+        let handle = out["handle"].as_str().expect("handle").to_string();
+
+        let out = s.execute("plan.set_shp_attribute", &json!({ "handle": handle, "key": "NOM", "value": "x" }));
+        assert!(out.is_err(), "an entity with no Shapefile attributes should be refused");
+    }
+
+    #[test]
+    fn export_shp_writes_back_fields_carried_over_from_a_previous_import() {
+        use cadcraft_geom::Vec3;
+        use cadcraft_io::shp;
+
+        let fixture = std::env::temp_dir().join(format!("cadcraft-plan-reexport-{}.shp", std::process::id()));
+        let geom = shp::Geometry::Point(Vec3::new(1.0, 2.0, 0.0));
+        let attrs = [("CODE".to_string(), "B12".to_string())];
+        shp::write_to_files(&fixture, &[shp::OutFeature { geometry: &geom, attributes: &attrs }]).expect("writing the fixture should succeed");
+
+        let mut s = session_with_doc();
+        s.execute("plan.import_shp", &json!({ "path": fixture.to_string_lossy() })).expect("import should succeed");
+
+        let out_path = std::env::temp_dir().join(format!("cadcraft-plan-reexport-out-{}.shp", std::process::id()));
+        let out = s.execute("plan.export_shp", &json!({ "path": out_path.to_string_lossy() })).expect("export should succeed");
+        assert_eq!(out["written"].as_u64(), Some(1));
+
+        let mut s2 = session_with_doc();
+        s2.execute("plan.import_shp", &json!({ "path": out_path.to_string_lossy() })).expect("reimport should succeed");
+        let doc = s2.doc().expect("doc");
+        let e = doc.space(&cadcraft_doc::Space::Model).and_then(|sp| sp.iter().next()).expect("one entity");
+        let (_, fields) = super::shp_attributes(e).expect("the reimported entity should still carry its fields");
+        assert_eq!(fields, attrs.to_vec());
+
+        for ext in ["shp", "shx", "dbf"] {
+            let _ = std::fs::remove_file(fixture.with_extension(ext));
             let _ = std::fs::remove_file(out_path.with_extension(ext));
         }
     }
