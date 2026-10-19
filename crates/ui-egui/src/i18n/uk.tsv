@@ -1477,3 +1477,25 @@
 	Show code label	Показувати підпис коду
 	Imported {n} point(s)	Імпортовано {n} точок(и)
 	Preview Points CSV/TXT	Попередній перегляд точок CSV/TXT
+	Add observation	Додати спостереження
+	Add reference	Додати орієнтир
+	Code	Код
+	Compute	Обчислити
+	Compute VO	Обчислити V0
+	Compute from references	Обчислити з орієнтирів
+	Computed VO: {vo} gon (σ {sigma})	Обчислено V0: {vo} гон (σ {sigma})
+	Hz reading (gon)	Відлік Hz (гон)
+	Instrument height	Висота приладу
+	Known VO value	Відоме значення V0
+	Observations	Спостереження
+	Slope distance	Похила відстань
+	Station	Станція
+	Target height	Висота віхи
+	VO (gon)	V0 (гон)
+	VO: {vo} gon	V0: {vo} гон
+	Zenith (gon)	Зеніт (гон)
+	{n} point(s) read; a station is needed for its angle/distance shots	Прочитано {n} точок(и); для вимірів кут/відстань потрібна станція
+	Station X/Y are required	Потрібні координати X/Y станції
+	At least one observation is required	Потрібне принаймні одне спостереження
+	Inserted {n} point(s)	Вставлено {n} точок(и)
+	Inspect GSI Carnet	Аналіз журналу GSI

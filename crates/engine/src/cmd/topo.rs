@@ -21,7 +21,7 @@
 use cadcraft_doc::{EntityKind, HAlign, Handle, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
 use cadcraft_topo_calc::{RadiationObservation, ReferenceObservation, radiation, zero_value};
-use cadcraft_topo_io::{csv_points, gsi};
+use cadcraft_topo_io::{csv_points, gsi, text_encoding};
 use serde_json::{Value, json};
 
 use super::draw::make_text;
@@ -67,6 +67,12 @@ pub fn specs() -> Vec<CommandSpec> {
                  (default \"auto\"), lines?: number (default 10)} → {rows: [[string]]}",
             )
             .noundo(),
+        // No menu entry: the Import GSI Carnet dialog's own first step, read before anything is
+        // asked of the person - it decides whether the dialog needs to show the station/VO
+        // fields at all (a coordinate-only carnet imports with neither).
+        CommandSpec::new("topo.gsi_inspect", "Inspect GSI Carnet", run_gsi_inspect)
+            .params("{path: string} → {pointCount, needsStation: bool, skippedLines}")
+            .noundo(),
     ]
 }
 
@@ -88,9 +94,28 @@ fn run_preview_points_csv(_s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "topo.preview_points_csv";
     let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
     let lines = p.get("lines").and_then(Value::as_u64).map_or(10, |n| n.clamp(1, 100) as usize);
-    let text = std::fs::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let text = text_encoding::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let rows = csv_points::preview(&text, csv_delimiter(str_param(p, "delimiter")), lines);
     Ok(json!({ "rows": rows }))
+}
+
+/// Whether a GSI carnet needs a station/VO before it can import - same test `run_import_gsi`
+/// itself uses, exposed read-only so the Import GSI dialog can decide which fields to show
+/// before the person has entered anything.
+fn gsi_needs_station(import: &gsi::GsiImport) -> bool {
+    import.points.iter().any(|gp| gp.x.is_none() && gp.hz_gon.is_some() && gp.vz_gon.is_some() && gp.slope_distance.is_some())
+}
+
+fn run_gsi_inspect(_s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.gsi_inspect";
+    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
+    let text = text_encoding::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let import = gsi::parse(&text);
+    Ok(json!({
+        "pointCount": import.points.len(),
+        "needsStation": gsi_needs_station(&import),
+        "skippedLines": import.skipped_lines,
+    }))
 }
 
 pub(crate) fn vec3_req(cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
@@ -322,7 +347,7 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("topo.import_gsi", "`path` is required"))?;
     let label = bool_or(p, "label", true);
 
-    let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_gsi", format!("{path}: {e}")))?;
+    let text = text_encoding::read_to_string(path).map_err(|e| bad("topo.import_gsi", format!("{path}: {e}")))?;
     let import = gsi::parse(&text);
 
     let needs_radiation = import.points.iter().any(|gp| gp.x.is_none() && gp.hz_gon.is_some() && gp.vz_gon.is_some() && gp.slope_distance.is_some());
@@ -378,7 +403,7 @@ fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
     let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(TCPOINT_BLOCK).to_string();
     let layer = str_param(p, "layer").map(str::trim).filter(|n| !n.is_empty() && *n != "0").map(str::to_string);
 
-    let text = std::fs::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let text = text_encoding::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let import = csv_points::parse_with(&text, csv_delimiter(str_param(p, "delimiter")));
 
     let mut points = Vec::with_capacity(import.points.len());

@@ -1156,3 +1156,25 @@
 	Preview	Aperçu
 	Imported {n} point(s)	{n} point(s) importé(s)
 	Preview Points CSV/TXT	Aperçu des points CSV/TXT
+	Add observation	Ajouter une observation
+	Add reference	Ajouter une référence
+	Code	Code
+	Compute	Calculer
+	Compute VO	Calculer le V0
+	Compute from references	Calculer à partir des références
+	Computed VO: {vo} gon (σ {sigma})	V0 calculé : {vo} gon (σ {sigma})
+	Hz reading (gon)	Lecture Hz (gon)
+	Instrument height	Hauteur d'instrument
+	Known VO value	Valeur de V0 connue
+	Observations	Observations
+	Slope distance	Distance inclinée
+	Station	Station
+	Target height	Hauteur de voyant
+	VO (gon)	V0 (gon)
+	VO: {vo} gon	V0 : {vo} gon
+	Zenith (gon)	Zénith (gon)
+	{n} point(s) read; a station is needed for its angle/distance shots	{n} point(s) lu(s) ; une station est nécessaire pour ses visées angle/distance
+	Station X/Y are required	La station X/Y est requise
+	At least one observation is required	Au moins une observation est requise
+	Inserted {n} point(s)	{n} point(s) inséré(s)
+	Inspect GSI Carnet	Inspecter le carnet GSI

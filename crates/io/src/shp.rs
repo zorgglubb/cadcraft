@@ -184,6 +184,57 @@ fn read_record(content: &[u8]) -> Result<Option<Geometry>, ShpError> {
     }
 }
 
+/// Decodes a `.dbf` text field. dBASE stores text in a single-byte codepage, almost always
+/// Windows-1252 (or its DOS/Latin-1 cousins, which agree with it on the accented letters French
+/// surveyors actually type) rather than UTF-8 - so a lossy UTF-8 decode turns `é`/`è`/`à`/`ç`
+/// into the replacement character `�` on any file that isn't already UTF-8. Valid UTF-8 bytes
+/// are kept as UTF-8 (a `.dbf` written by a UTF-8-aware tool still reads correctly); anything
+/// else is decoded as Windows-1252, which is also a correct reading of plain Latin-1.
+fn decode_dbf_text(raw: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(raw) {
+        return s.to_string();
+    }
+    raw.iter().map(|&b| cp1252_char(b)).collect()
+}
+
+/// Windows-1252 code point for one byte. Bytes 0x00-0x7F and 0xA0-0xFF match Unicode directly
+/// (Latin-1); 0x80-0x9F hold Windows-1252's own punctuation/currency marks instead of the C1
+/// control codes Latin-1 would give them, so those are mapped explicitly (`U+FFFD` for the five
+/// bytes Windows-1252 leaves undefined).
+fn cp1252_char(b: u8) -> char {
+    match b {
+        0x80 => '\u{20AC}',
+        0x82 => '\u{201A}',
+        0x83 => '\u{0192}',
+        0x84 => '\u{201E}',
+        0x85 => '\u{2026}',
+        0x86 => '\u{2020}',
+        0x87 => '\u{2021}',
+        0x88 => '\u{02C6}',
+        0x89 => '\u{2030}',
+        0x8A => '\u{0160}',
+        0x8B => '\u{2039}',
+        0x8C => '\u{0152}',
+        0x8E => '\u{017D}',
+        0x91 => '\u{2018}',
+        0x92 => '\u{2019}',
+        0x93 => '\u{201C}',
+        0x94 => '\u{201D}',
+        0x95 => '\u{2022}',
+        0x96 => '\u{2013}',
+        0x97 => '\u{2014}',
+        0x98 => '\u{02DC}',
+        0x99 => '\u{2122}',
+        0x9A => '\u{0161}',
+        0x9B => '\u{203A}',
+        0x9C => '\u{0153}',
+        0x9E => '\u{017E}',
+        0x9F => '\u{0178}',
+        0x81 | 0x8D | 0x8F | 0x90 | 0x9D => '\u{FFFD}',
+        _ => b as char,
+    }
+}
+
 /// Reads a `.dbf` file's records as column-name/text-value pairs, one `Vec` per record, in
 /// field-definition order. A `.dbf` this reader can't make sense of (bad header, unknown field
 /// layout) reads as an empty attribute set per record rather than failing the whole import.
@@ -210,7 +261,7 @@ fn read_dbf_checked(bytes: &[u8]) -> Option<Vec<Vec<(String, String)>>> {
         }
         let name_bytes = bytes.get(off..off + 11)?;
         let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(11);
-        let name = String::from_utf8_lossy(&name_bytes[..name_len]).trim().to_string();
+        let name = decode_dbf_text(&name_bytes[..name_len]).trim().to_string();
         let len = *bytes.get(off + 16)? as usize;
         fields.push((name, len));
         off += 32;
@@ -229,7 +280,7 @@ fn read_dbf_checked(bytes: &[u8]) -> Option<Vec<Vec<(String, String)>>> {
         for (name, len) in &fields {
             let Some(raw) = record.get(foff..foff + len) else { break };
             foff += len;
-            row.push((name.clone(), String::from_utf8_lossy(raw).trim().to_string()));
+            row.push((name.clone(), decode_dbf_text(raw).trim().to_string()));
         }
         out.push(row);
     }

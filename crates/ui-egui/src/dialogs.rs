@@ -32,6 +32,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "datasearch" => crate::tabledlg::search_dialog(app, ctx, &mut open),
         "removetable" => crate::tabledlg::remove_table_dialog(app, ctx, &mut open),
         "importpoints" => crate::importpointsdlg::dialog(app, ctx, &mut open),
+        "importgsi" => crate::importgsidlg::dialog(app, ctx, &mut open),
+        "station" => crate::stationdlg::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),

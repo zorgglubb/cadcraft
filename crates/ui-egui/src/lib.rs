@@ -24,9 +24,11 @@ pub mod crsdlg;
 pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;
+pub mod importgsidlg;
 pub mod importpointsdlg;
 mod mtext_editor;
 pub mod spacemouse;
+pub mod stationdlg;
 pub mod tabledlg;
 // The External References palette.
 pub mod xrefs;
@@ -286,6 +288,10 @@ pub struct CadApp {
     pub remove_table_dlg: Option<tabledlg::RemoveTableState>,
     /// The Import Points (CSV/TXT)... dialog while open ([`importpointsdlg`]).
     pub import_points_dlg: Option<importpointsdlg::State>,
+    /// The Radiation / Zero Value (VO) dialog while open ([`stationdlg`]).
+    pub station_dlg: Option<stationdlg::State>,
+    /// The Import GSI Carnet dialog while open ([`importgsidlg`]).
+    pub import_gsi_dlg: Option<importgsidlg::State>,
 }
 
 impl CadApp {
@@ -330,6 +336,8 @@ impl CadApp {
             search_dlg: None,
             remove_table_dlg: None,
             import_points_dlg: None,
+            station_dlg: None,
+            import_gsi_dlg: None,
         }
     }
 

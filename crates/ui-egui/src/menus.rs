@@ -251,9 +251,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // headless build), this falls through unhandled and the engine reports the ordinary
         // "`path` is required" error. A successful import brings the new geometry into view, the
         // same way opening a drawing does.
-        // TOPO.IMPORT_POINTS is the one exception: it needs a delimiter, a layer and a block
-        // chosen first (the Import Points dialog, with its own live preview), so once the file
-        // is picked this opens that instead of running the import right away.
+        // TOPO.IMPORT_POINTS and TOPO.IMPORT_GSI are the two exceptions: Points needs a
+        // delimiter, a layer and a block chosen first (the Import Points dialog, with its own
+        // live preview); GSI needs a station/VO only when the carnet actually has angle+distance
+        // shots with no ready coordinates, which its own dialog checks before deciding whether
+        // to ask for anything at all. Both open their dialog instead of running the import
+        // right away once the file is picked.
         "topo.import_gsi" | "topo.import_points" | "plan.import_shp" | "plan.import_image" if no_path => {
             let pick = app.services.pick_open.as_ref()?;
             let filters = match id {
@@ -267,11 +270,27 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 crate::importpointsdlg::open(app, path);
                 return Some(Ok(Value::Null));
             }
+            if id == "topo.import_gsi" {
+                crate::importgsidlg::open(app, path);
+                return Some(Ok(Value::Null));
+            }
             let r = app.run(id, json!({ "path": path }));
             if r.is_ok() {
                 app.canvas.zoom_pending = true;
             }
             r
+        }
+        // Typed, menu or toolbar (no parameters): both need a station and an orientation picked
+        // first, so these open the Radiation/Zero Value dialog instead of erring on a missing
+        // `station`/`vo`. A JSON call (script, control channel, MCP) with real parameters runs
+        // the plain command as given.
+        "topo.radiation" if params.is_null() && app.session.state().is_ok() => {
+            crate::stationdlg::open(app, crate::stationdlg::Mode::Radiation);
+            Ok(Value::Null)
+        }
+        "topo.zero_value" if params.is_null() && app.session.state().is_ok() => {
+            crate::stationdlg::open(app, crate::stationdlg::Mode::ZeroValue);
+            Ok(Value::Null)
         }
         // One file at a time for now - EDIGEO parcels often span several `.VEC` files, but
         // there is no multi-select picker service yet (a further increment).
@@ -342,6 +361,23 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 return Some(Ok(Value::Null));
             };
             app.run(id, json!({ "path": path }))
+        }
+        // From a menu (no parameters): a listing is a write, not a read, so it needs a save
+        // path rather than an open path. A JSON call (script, control channel, MCP) with `path`
+        // already given never gets here.
+        "topo.listing_points" if no_path => {
+            let pick = app.services.pick_save.as_ref()?;
+            let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
+            let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+            let Some(path) = pick(&format!("{}-points.csv", stem.unwrap_or_else(|| "Drawing".into())), crate::POINTS_FILTERS) else {
+                return Some(Ok(Value::Null));
+            };
+            let r = app.run(id, json!({ "path": path }));
+            app.session.echo(match &r {
+                Ok(v) => format!("{} point(s) written to {path}", v["count"].as_u64().unwrap_or(0)),
+                Err(e) => e.clone(),
+            });
+            r
         }
         "ui.toggle.statusbar" => {
             toggle(&mut app.ui.show_status_bar, params);
