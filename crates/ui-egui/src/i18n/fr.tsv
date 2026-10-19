@@ -1047,6 +1047,25 @@
 	Projection	Projection
 	Radiation	Rayonnement
 	Free Station	Station libre
+	Edit Altitudes	Modification des altitudes
+	Points to take into account	Points topographiques à prendre en compte
+	Point block name(s) + layer(s)	Nom(s) des blocs points + calque(s)
+	Manual selection	Sélection manuelle
+	Every point in the drawing	Tous les points du dessin
+	Every point in the list	Tous les points contenus dans la liste
+	Point block name(s)	Nom(s) des blocs points
+	Block insertion layer(s)	Calque(s) d'insertion des blocs
+	Use to filter the manual selection	Utiliser pour filtrer la sélection manuelle
+	Manual selection isn't wired up in this dialog yet - pick "Point block name(s) + layer(s)" or "Every point in the drawing" instead.	La sélection manuelle n'est pas encore disponible dans cette fenêtre - choisissez plutôt « Nom(s) des blocs points + calque(s) » ou « Tous les points du dessin ».
+	Filter by matricule	Filtrage par matricules
+	First matricule	Premier matricule
+	Last matricule	Dernier matricule
+	Operations to perform	Opérations à effectuer
+	Set/keep points in 2D	Mettre / garder les points en 2D
+	Set/keep points in 3D	Mettre / garder les points en 3D
+	Altimetric constant	Constante altimétrique
+	New number of decimals	Nouveau nombre de décimales
+	{n} point(s) updated	{n} point(s) mis à jour
 	Traverse (Cheminement)	Cheminement
 	Known reference points (distance + Hz reading to each, at least 2)	Points de référence connus (distance + lecture Hz pour chacun, au moins 2)
 	Approximate station position (optional, helps convergence)	Position approchée de la station (facultatif, aide à la convergence)
@@ -1126,6 +1145,9 @@
 	Portrait	Portrait
 	Landscape	Paysage
 	Scale 1:	Échelle 1:
+	Suggest scale	Suggérer l'échelle
+	= {m} m on the ground	= {m} m sur le terrain
+	No standard scale up to 1:{max} fits {paper} - pick a larger paper or a smaller window	Aucune échelle normalisée jusqu'à 1:{max} ne tient sur {paper} - choisissez un papier plus grand ou une fenêtre plus petite
 	Cross spacing (paper cm)	Espacement des croix (cm papier)
 	Layout (blank: next free name)	Présentation (vide : prochain nom libre)
 	Select a window first.	Sélectionnez d'abord une fenêtre.

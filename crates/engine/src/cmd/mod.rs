@@ -43,6 +43,7 @@ mod table;
 mod terrain;
 mod tolerance;
 mod topo;
+mod topo_altitudes;
 mod topo_labels;
 mod topo_listing;
 mod topo_points;
@@ -218,6 +219,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo_listing::specs());
         v.extend(topo_symbols::specs());
         v.extend(topo_labels::specs());
+        v.extend(topo_altitudes::specs());
         v.extend(foncier::specs());
         v.extend(topo_split::specs());
         v.extend(terrain::specs());

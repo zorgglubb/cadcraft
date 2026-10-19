@@ -44,6 +44,34 @@ impl Default for State {
 
 const PAPERS: [&str; 5] = ["A4", "A3", "A2", "A1", "A0"];
 
+/// Normalized map scales (the 1:N series a drafter actually picks from), ascending.
+const STANDARD_SCALES: [u32; 20] = [5, 10, 20, 40, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 4000, 5000, 10000, 20000];
+
+/// The smallest normalized scale (least zoomed out) at which `window` fits on `paper_name`
+/// (`landscape`: `None` auto-picks per the window's own aspect, same default PLAN.CARROYAGE
+/// itself uses) - found by trying each standard scale through the engine's own preview, so the
+/// fit check is exactly the one PLAN.CARROYAGE applies when actually run, never a second,
+/// possibly-drifting copy of its margin/unit math.
+fn suggest_scale(app: &mut CadApp, window: (cadcraft_geom::Vec2, cadcraft_geom::Vec2), paper: &str, landscape: Option<bool>) -> Option<u32> {
+    let (a, b) = window;
+    for &n in &STANDARD_SCALES {
+        let mut v = json!({
+            "window": { "min": [a.x, a.y], "max": [b.x, b.y] },
+            "scale": n,
+            "paper": paper,
+            "spacingCm": 10.0,
+            "preview": true,
+        });
+        if let Some(l) = landscape {
+            v["landscape"] = json!(l);
+        }
+        if app.run("plan.carroyage", v).is_ok() {
+            return Some(n);
+        }
+    }
+    None
+}
+
 /// Typed, menu or toolbar invocation of PLAN.CARROYAGE (no parameters) opens this.
 pub fn open(app: &mut CadApp) {
     app.carroyage_dlg = Some(State::default());
@@ -108,8 +136,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         return;
     };
 
-    let (mut select, mut create, mut close) = (false, false, false);
-    egui::Window::new(crate::tl!("Carroyage")).open(open).resizable(true).collapsible(false).default_size(vec2(360.0, 420.0)).show(ctx, |ui| {
+    let (mut select, mut create, mut close, mut suggest) = (false, false, false, false);
+    let old_paper = st.paper.clone();
+    egui::Window::new(crate::tl!("Carroyage")).open(open).resizable(true).collapsible(false).default_size(vec2(380.0, 460.0)).show(ctx, |ui| {
         ui.horizontal(|ui| {
             select = ui.button(crate::tl!("Select window")).clicked();
             match st.window {
@@ -124,10 +153,20 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.separator();
         egui::Grid::new("cc_carroyage_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(crate::tl!("Paper"));
-            egui::ComboBox::from_id_salt("cc_carroyage_paper").selected_text(st.paper.clone()).show_ui(ui, |ui| {
-                for p in PAPERS {
-                    ui.selectable_value(&mut st.paper, p.to_string(), p);
-                }
+            ui.horizontal(|ui| {
+                let changed = egui::ComboBox::from_id_salt("cc_carroyage_paper")
+                    .selected_text(st.paper.clone())
+                    .show_ui(ui, |ui| {
+                        for p in PAPERS {
+                            ui.selectable_value(&mut st.paper, p.to_string(), p);
+                        }
+                    })
+                    .inner
+                    .is_some();
+                // Re-suggesting right away when the paper changes means the frame/scale shown
+                // always matches the sheet actually picked, instead of silently going stale
+                // (or not fitting) until the person remembers to click Suggest themselves.
+                suggest = ui.button(crate::tl!("Suggest scale")).clicked() || (changed && st.paper != old_paper);
             });
             ui.end_row();
 
@@ -140,12 +179,30 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.end_row();
 
             ui.label(crate::tl!("Scale 1:"));
-            ui.text_edit_singleline(&mut st.scale_text);
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut st.scale_text);
+                let current: Option<u32> = st.scale_text.trim().parse().ok();
+                egui::ComboBox::from_id_salt("cc_carroyage_scale").selected_text(crate::tl!("Standard")).width(90.0).show_ui(ui, |ui| {
+                    for n in STANDARD_SCALES {
+                        if ui.selectable_label(current == Some(n), format!("1:{n}")).clicked() {
+                            st.scale_text = n.to_string();
+                        }
+                    }
+                });
+            });
             ui.end_row();
 
             ui.label(crate::tl!("Cross spacing (paper cm)"));
             ui.text_edit_singleline(&mut st.spacing_text);
             ui.end_row();
+
+            // The same spacing restated on the ground, in metres - what "N cm on paper" actually
+            // means once the scale is applied, so the person doesn't have to do that math by hand.
+            if let (Ok(spacing_cm), Ok(scale)) = (st.spacing_text.trim().parse::<f64>(), st.scale_text.trim().parse::<f64>()) {
+                ui.label("");
+                ui.label(crate::tf!("= {m} m on the ground", m = format!("{:.2}", spacing_cm / 100.0 * scale)));
+                ui.end_row();
+            }
 
             ui.label(crate::tl!("Layer"));
             ui.text_edit_singleline(&mut st.layer);
@@ -192,6 +249,16 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         app.carroyage_dlg = Some(st.clone());
         start_pick(app);
         return;
+    }
+    if suggest && let Some(window) = st.window {
+        match suggest_scale(app, window, &st.paper, st.landscape) {
+            Some(n) => st.scale_text = n.to_string(),
+            None => app.session.echo(crate::tf!(
+                "No standard scale up to 1:{max} fits {paper} - pick a larger paper or a smaller window",
+                max = STANDARD_SCALES[STANDARD_SCALES.len() - 1],
+                paper = st.paper
+            )),
+        }
     }
     if create && let Some(p) = params(&st, false) {
         let r = app.run("plan.carroyage", p);

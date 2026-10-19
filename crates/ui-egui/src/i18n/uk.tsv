@@ -1369,6 +1369,25 @@
 	Projection	Проєкція
 	Radiation	Полярна зйомка
 	Free Station	Вільна станція
+	Edit Altitudes	Зміна висот
+	Points to take into account	Топографічні точки для врахування
+	Point block name(s) + layer(s)	Назва(и) блоків точок + шар(и)
+	Manual selection	Ручний вибір
+	Every point in the drawing	Усі точки креслення
+	Every point in the list	Усі точки зі списку
+	Point block name(s)	Назва(и) блоків точок
+	Block insertion layer(s)	Шар(и) вставки блоків
+	Use to filter the manual selection	Використовувати для фільтрації ручного вибору
+	Manual selection isn't wired up in this dialog yet - pick "Point block name(s) + layer(s)" or "Every point in the drawing" instead.	Ручний вибір у цьому вікні ще не реалізовано - виберіть «Назва(и) блоків точок + шар(и)» або «Усі точки креслення».
+	Filter by matricule	Фільтрація за номерами
+	First matricule	Перший номер
+	Last matricule	Останній номер
+	Operations to perform	Операції для виконання
+	Set/keep points in 2D	Встановити/зберегти точки у 2D
+	Set/keep points in 3D	Встановити/зберегти точки у 3D
+	Altimetric constant	Висотна константа
+	New number of decimals	Нова кількість десяткових знаків
+	{n} point(s) updated	Оновлено точок: {n}
 	Traverse (Cheminement)	Теодолітний хід
 	Known reference points (distance + Hz reading to each, at least 2)	Відомі опорні точки (відстань + відлік Hz для кожної, не менше 2)
 	Approximate station position (optional, helps convergence)	Приблизне положення станції (необов'язково, допомагає збіжності)
@@ -1448,6 +1467,9 @@
 	Portrait	Книжкова
 	Landscape	Альбомна
 	Scale 1:	Масштаб 1:
+	Suggest scale	Запропонувати масштаб
+	= {m} m on the ground	= {m} м на місцевості
+	No standard scale up to 1:{max} fits {paper} - pick a larger paper or a smaller window	Жоден стандартний масштаб до 1:{max} не вміщується на {paper} - виберіть більший папір або меншу область
 	Cross spacing (paper cm)	Крок хрестиків (см на папері)
 	Layout (blank: next free name)	Презентація (порожньо: наступна вільна назва)
 	Select a window first.	Спочатку виберіть область.

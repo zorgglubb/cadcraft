@@ -24,6 +24,7 @@ pub mod credits;
 pub mod crsdlg;
 pub mod dialogs;
 pub mod docking;
+pub mod editaltitudesdlg;
 pub mod freestationdlg;
 pub mod hatchdlg;
 pub mod importgsidlg;
@@ -301,6 +302,8 @@ pub struct CadApp {
     pub free_station_dlg: Option<freestationdlg::State>,
     /// The Traverse (Cheminement) dialog while open ([`cheminementdlg`]).
     pub cheminement_dlg: Option<cheminementdlg::State>,
+    /// The Edit Altitudes dialog while open ([`editaltitudesdlg`]).
+    pub edit_altitudes_dlg: Option<editaltitudesdlg::State>,
 }
 
 impl CadApp {
@@ -349,6 +352,7 @@ impl CadApp {
             import_gsi_dlg: None,
             free_station_dlg: None,
             cheminement_dlg: None,
+            edit_altitudes_dlg: None,
         }
     }
 
