@@ -136,9 +136,23 @@ fn usable_references(st: &State) -> Vec<&GsiRow> {
     st.rows.iter().filter(|r| r.role == Role::Reference && r.x.is_some() && r.y.is_some() && r.hz.is_some()).collect()
 }
 
-fn ready(st: &State) -> bool {
-    let station = num(&st.station_x).is_some() && num(&st.station_y).is_some();
-    station && if st.from_references { !usable_references(st).is_empty() } else { num(&st.vo).is_some() }
+/// Why "Compute"/"Import" are greyed out, for the tooltip - a disabled button with no explanation
+/// is where this dialog kept losing people: nothing on screen said the station had to be set
+/// first by right-clicking its row (or typed in by hand).
+fn blocked_reason(st: &State) -> Option<&'static str> {
+    if num(&st.station_x).is_none() || num(&st.station_y).is_none() {
+        return Some("Station X/Y are empty - right-click the station's row above and choose Station, or type its coordinates in here");
+    }
+    if st.from_references {
+        if usable_references(st).is_empty() {
+            return Some(
+                "No reference row has both coordinates and an Hz reading yet - right-click a row and choose Reference, or import known references",
+            );
+        }
+    } else if num(&st.vo).is_none() {
+        return Some("VO (gon) must be a number");
+    }
+    None
 }
 
 fn run_import(app: &mut CadApp, st: &State) {
@@ -376,6 +390,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label("Z");
                 ui.text_edit_singleline(&mut st.station_z);
             });
+            if num(&st.station_x).is_none() || num(&st.station_y).is_none() {
+                ui.label(crate::tl!("Right-click the station's row above and choose Station, or type its X/Y in here"));
+            }
             ui.horizontal(|ui| {
                 if ui.selectable_label(!st.from_references, crate::tl!("Known VO value")).clicked() {
                     st.from_references = false;
@@ -394,7 +411,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 });
             }
             ui.horizontal(|ui| {
-                compute = ui.add_enabled(ready(&st), egui::Button::new(crate::tl!("Compute"))).clicked();
+                let reason = blocked_reason(&st);
+                let mut btn = ui.add_enabled(reason.is_none(), egui::Button::new(crate::tl!("Compute")));
+                if let Some(r) = reason {
+                    btn = btn.on_disabled_hover_text(crate::i18n::t(r));
+                }
+                compute = btn.clicked();
                 if let Some((vo, sigma)) = st.last_vo {
                     ui.label(match sigma {
                         Some(s) => crate::tf!("Computed VO: {vo} gon (σ {sigma})", vo = format!("{vo:.4}"), sigma = format!("{s:.4}")),
@@ -405,7 +427,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.checkbox(&mut st.label, crate::tl!("Show code label"));
             ui.separator();
             ui.horizontal(|ui| {
-                import = ui.add_enabled(ready(&st), egui::Button::new(crate::tl!("Import"))).clicked();
+                let reason = blocked_reason(&st);
+                let mut btn = ui.add_enabled(reason.is_none(), egui::Button::new(crate::tl!("Import")));
+                if let Some(r) = reason {
+                    btn = btn.on_disabled_hover_text(crate::i18n::t(r));
+                }
+                import = btn.clicked();
                 export = ui.button(crate::tl!("Export CSV/TXT...")).clicked();
                 close = ui.button(crate::tl!("Close")).clicked();
             });
@@ -512,6 +539,37 @@ mod tests {
         assert_eq!(st.station_x, "1000");
         assert_eq!(st.station_y, "1000");
         assert_eq!(st.rows[i].role, Role::Station);
+    }
+
+    #[test]
+    fn blocked_reason_explains_why_compute_and_import_are_disabled() {
+        let mut st = State::new("x.gsi".into());
+        assert!(blocked_reason(&st).is_some(), "no station yet - must be blocked");
+
+        st.station_x = "1000".into();
+        st.station_y = "1000".into();
+        // Known-VO mode (the default): a numeric VO (State::new defaults it to "0") is enough.
+        assert!(blocked_reason(&st).is_none());
+        st.vo = "not a number".into();
+        assert!(blocked_reason(&st).is_some());
+        st.vo = "50".into();
+        assert!(blocked_reason(&st).is_none());
+
+        // Compute-from-references mode: blocked until at least one row is a usable reference.
+        st.from_references = true;
+        assert!(blocked_reason(&st).is_some(), "no reference row marked yet");
+        st.rows.push(GsiRow {
+            id: "R1".into(),
+            code: None,
+            hz: Some(10.0),
+            vz: None,
+            dist: None,
+            x: Some(10.0),
+            y: Some(20.0),
+            z: None,
+            role: Role::Reference,
+        });
+        assert!(blocked_reason(&st).is_none());
     }
 
     #[test]

@@ -513,6 +513,40 @@ fn round_to(v: f64, step: f64) -> f64 {
     if step <= 0.0 || !step.is_finite() { v } else { (v / step).round() * step }
 }
 
+/// Millimetres per *model*-space drawing unit (DXF `$INSUNITS`, header group 70) - how many real
+/// millimetres a window's model-space coordinates actually span on the ground.
+///
+/// `cadcraft_render::paper::paper_unit_mm` answers a different question (mm per *paper*-space
+/// unit, from `$MEASUREMENT`'s metric/imperial flag) and is right for sizing the sheet itself, but
+/// carroyage also needs to know what the model-space window (survey coordinates, say) means in
+/// real mm before it can be scaled onto that sheet. A drawing whose model space is set to metres
+/// (INSUNITS 6, as a UTM-coordinate survey drawing typically is) must not have its window treated
+/// as millimetres, or a few hundred real metres comes out looking like a few hundred millimetres -
+/// tiny enough that the smallest standard scale (1:5) already "fits" and the cross spacing (tens
+/// of centimetres) is larger than the whole window, so the grid comes out with zero crosses.
+///
+/// `$INSUNITS` 0 (unspecified) falls back to the paper-space assumption so an untagged drawing
+/// behaves exactly as it always did.
+fn model_unit_mm(d: &Drawing) -> f64 {
+    match d.header.i64("INSUNITS", 0) {
+        1 => 25.4,        // inches
+        2 => 304.8,       // feet
+        3 => 1_609_344.0, // miles
+        4 => 1.0,         // millimeters
+        5 => 10.0,        // centimeters
+        6 => 1000.0,      // meters
+        7 => 1_000_000.0, // kilometers
+        8 => 0.0000254,   // microinches
+        9 => 0.0254,      // mils
+        10 => 914.4,      // yards
+        13 => 0.001,      // microns
+        14 => 100.0,      // decimeters
+        15 => 10_000.0,   // decameters
+        16 => 100_000.0,  // hectometers
+        _ => cadcraft_render::paper::paper_unit_mm(d),
+    }
+}
+
 fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plan.carroyage";
 
@@ -551,15 +585,19 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     // `cadcraft_render::sheet` does the same `/unit_mm` to get a layout's paper-space size), so
     // every paper-space length here is computed in millimetres and then divided by `unit_mm`.
     let unit_mm = cadcraft_render::paper::paper_unit_mm(d0);
+    // How many real millimetres `window`'s model-space coordinates span on the ground - see
+    // `model_unit_mm` (not the same thing as `unit_mm`, the paper's own unit).
+    let model_mm = model_unit_mm(d0);
     let to_ps = |mm: f64| mm / unit_mm;
     let margin_mm = 15.0_f64.min(paper_w.min(paper_h) * 0.1).max(5.0);
     let printable_w = to_ps((paper_w - 2.0 * margin_mm).max(1.0));
     let printable_h = to_ps((paper_h - 2.0 * margin_mm).max(1.0));
 
-    // The paper-space size `window` occupies at exactly 1:`scale` (paper = model / scale) - never
-    // silently rescaled, since that would mislabel every coordinate this command then writes.
-    let vp_w = window.width() / scale;
-    let vp_h = window.height() / scale;
+    // The paper-space size `window` occupies at exactly 1:`scale` (paper = ground-mm / scale,
+    // converted to model mm then to paper-space units) - never silently rescaled, since that would
+    // mislabel every coordinate this command then writes.
+    let vp_w = to_ps(window.width() * model_mm / scale);
+    let vp_h = to_ps(window.height() * model_mm / scale);
     if vp_w < 1e-9 || vp_h < 1e-9 {
         return Err(bad(CMD, "the window is too small to fit at that scale"));
     }
@@ -596,14 +634,17 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     let outer = vp_rect;
     let inset = to_ps(1.0).min(outer.width().min(outer.height()) * 0.02);
     let inner = Bounds2::new(outer.min + Vec2::new(inset, inset), outer.max - Vec2::new(inset, inset));
-    let spacing_ps = to_ps(spacing_cm * 10.0);
-    let spacing_ground = spacing_ps * scale;
+    // Ground-unit (model-space) step between crosses: `spacingCm` is a literal paper distance
+    // (independent of the paper's own measurement unit), scaled up to the ground and converted
+    // into model-space units via `model_mm` - see `model_unit_mm`.
+    let spacing_ground = spacing_cm * 10.0 * scale / model_mm;
     let text_h = (inset * 2.0).max(to_ps(1.5)).min(outer.height().min(outer.width()) * 0.05);
     let tick_len = inset.max(to_ps(1.0)) * 1.5;
-    // Map a ground X/Y back to a paper point inside the viewport (paper = model / scale).
+    // Map a ground X/Y back to a paper point inside the viewport (paper = ground-mm / scale,
+    // converted to model mm then to paper-space units, same as `vp_w`/`vp_h` above).
     let to_paper = |gx: f64, gy: f64| -> Vec2 {
-        let dx = (gx - window.center().x) / scale;
-        let dy = (gy - window.center().y) / scale;
+        let dx = to_ps((gx - window.center().x) * model_mm / scale);
+        let dy = to_ps((gy - window.center().y) * model_mm / scale);
         vp_rect.center() + Vec2::new(dx, dy)
     };
     let gx0 = round_to(window.min.x, spacing_ground);
@@ -1293,6 +1334,31 @@ mod tests {
         let mut s = session_with_doc();
         let out = s.execute("plan.carroyage", &json!({ "window": { "min": [0.0, 0.0], "max": [10.0, 10.0] }, "scale": 100, "paper": "A42" }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn carroyage_suggests_a_sane_scale_for_a_metre_unit_survey_drawing() {
+        // A survey/topo drawing whose model space is set to metres (common for UTM coordinates,
+        // unlike the default millimetre drawing unit) used to have its window math silently treat
+        // those metres as millimetres - a few hundred real metres came out "fitting" on paper at
+        // absurdly zoomed-in scales like 1:5, with a cross spacing larger than the whole window
+        // (so the grid came out with zero crosses). Regression for that mismatch.
+        let mut s = session_with_doc();
+        s.execute("units", &json!({ "insunits": 6 })).expect("should switch the drawing to metres");
+
+        // Roughly matches the field report: a ~409m x ~260m UTM window.
+        let window = json!({ "min": [349233.42, 6963926.85], "max": [349642.56, 6963666.68] });
+
+        // At 1:5 (and every other small scale), the window must NOT fit a mm-sized sheet anymore.
+        let tiny = s.execute("plan.carroyage", &json!({ "window": window, "scale": 5, "paper": "A4", "spacingCm": 10.0, "preview": true }));
+        assert!(tiny.is_err(), "409m should not fit on an A4 sheet at 1:5");
+
+        // A scale that actually fits ~409m x ~260m on A4 (which prints roughly 267x180mm) works,
+        // and produces a real grid rather than zero crosses.
+        let out = s
+            .execute("plan.carroyage", &json!({ "window": window, "scale": 2000, "paper": "A4", "spacingCm": 10.0, "preview": true }))
+            .expect("1:2000 should fit a ~409m window on A4");
+        assert!(out["crosses"].as_u64().unwrap_or(0) > 0, "a window that fits should get a non-empty grid: {out}");
     }
 
     #[test]

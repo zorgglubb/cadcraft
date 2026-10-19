@@ -1540,6 +1540,10 @@
 	{n} matched	{n} збігів
 	Parse Points CSV/TXT	Розібрати точки CSV/TXT
 	Compute Radiation (preview)	Обчислити полярну зйомку (попередній перегляд)
+	Right-click the station's row above and choose Station, or type its X/Y in here	Клацніть правою кнопкою на рядку станції вище і виберіть "Станція", або введіть її X/Y тут
+	Station X/Y are empty - right-click the station's row above and choose Station, or type its coordinates in here	X/Y станції порожні - клацніть правою кнопкою на рядку станції вище і виберіть "Станція", або введіть координати тут
+	No reference row has both coordinates and an Hz reading yet - right-click a row and choose Reference, or import known references	Жоден рядок орієнтира ще не має одночасно координат і відліку Hz - клацніть правою кнопкою на рядку і виберіть "Орієнтир", або імпортуйте відомі орієнтири
+	VO (gon) must be a number	VO (гони) має бути числом
 	Station X/Y are required	Потрібні координати X/Y станції
 	At least one observation is required	Потрібне принаймні одне спостереження
 	Inserted {n} point(s)	Вставлено {n} точок(и)
