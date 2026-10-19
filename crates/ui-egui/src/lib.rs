@@ -24,6 +24,7 @@ pub mod crsdlg;
 pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;
+pub mod importpointsdlg;
 mod mtext_editor;
 pub mod spacemouse;
 pub mod tabledlg;
@@ -283,6 +284,8 @@ pub struct CadApp {
     pub search_dlg: Option<tabledlg::SearchState>,
     /// The Remove Table... dialog while open or picking entities ([`tabledlg`]).
     pub remove_table_dlg: Option<tabledlg::RemoveTableState>,
+    /// The Import Points (CSV/TXT)... dialog while open ([`importpointsdlg`]).
+    pub import_points_dlg: Option<importpointsdlg::State>,
 }
 
 impl CadApp {
@@ -326,6 +329,7 @@ impl CadApp {
             assign_table_dlg: None,
             search_dlg: None,
             remove_table_dlg: None,
+            import_points_dlg: None,
         }
     }
 

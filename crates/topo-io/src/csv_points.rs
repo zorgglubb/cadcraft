@@ -29,6 +29,31 @@ enum Delimiter {
     Whitespace,
 }
 
+/// The delimiter an import dialog lets a person pick explicitly, instead of leaving it to
+/// [`detect_delimiter`]. `Auto` reproduces [`parse`]'s own detection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CsvDelimiter {
+    Auto,
+    Comma,
+    Semicolon,
+    Colon,
+    Space,
+    Tab,
+}
+
+impl Delimiter {
+    fn from_choice(choice: CsvDelimiter, sample: &str) -> Self {
+        match choice {
+            CsvDelimiter::Auto => detect_delimiter(sample),
+            CsvDelimiter::Comma => Delimiter::Char(','),
+            CsvDelimiter::Semicolon => Delimiter::Char(';'),
+            CsvDelimiter::Colon => Delimiter::Char(':'),
+            CsvDelimiter::Space => Delimiter::Whitespace,
+            CsvDelimiter::Tab => Delimiter::Char('\t'),
+        }
+    }
+}
+
 fn detect_delimiter(sample: &str) -> Delimiter {
     for c in [';', ',', '\t'] {
         if sample.matches(c).count() >= 1 {
@@ -141,11 +166,17 @@ fn parse_row(fields: &[String], layout: &Layout, row_number: usize) -> Option<Cs
 /// (wrong field count, non-numeric X or Y) is counted in [`CsvImport::skipped_lines`] rather than
 /// failing the whole file.
 pub fn parse(text: &str) -> CsvImport {
+    parse_with(text, CsvDelimiter::Auto)
+}
+
+/// Same as [`parse`], but with the delimiter given explicitly rather than detected - what an
+/// import dialog uses once the person has picked one (or left it on `Auto`).
+pub fn parse_with(text: &str, delimiter: CsvDelimiter) -> CsvImport {
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let Some(first) = lines.next() else {
         return CsvImport::default();
     };
-    let delim = detect_delimiter(first);
+    let delim = Delimiter::from_choice(delimiter, first);
     let first_fields = split_fields(first, delim);
 
     let (layout, start_with_first_as_data) = if looks_like_header(&first_fields) {
@@ -176,6 +207,19 @@ pub fn parse(text: &str) -> CsvImport {
     CsvImport { points, skipped_lines: skipped }
 }
 
+/// The first `max_lines` non-empty lines, each split into fields by `delimiter` (or detected,
+/// for `Auto`, from the first one) - a raw preview an import dialog can show and recompute as
+/// the person changes the delimiter, without running the full [`parse_with`] (column roles,
+/// header detection) on every keystroke.
+pub fn preview(text: &str, delimiter: CsvDelimiter, max_lines: usize) -> Vec<Vec<String>> {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return Vec::new();
+    };
+    let delim = Delimiter::from_choice(delimiter, first);
+    std::iter::once(first).chain(lines).take(max_lines.max(1)).map(|l| split_fields(l, delim)).collect()
+}
+
 /// Groups points by code, for callers that want to reconstruct geometry from coded field codes
 /// (walls, fences, breaklines) rather than inserting bare points.
 pub fn by_code(import: &CsvImport) -> HashMap<String, Vec<&CsvPoint>> {
@@ -202,6 +246,32 @@ mod tests {
         assert!((p.y - 8226052.972).abs() < 1e-6);
         assert!((p.z.unwrap_or(f64::NAN) - 25.380).abs() < 1e-6);
         assert_eq!(p.code, None);
+    }
+
+    #[test]
+    fn parse_with_an_explicit_delimiter_ignores_what_auto_would_have_picked() {
+        // A semicolon-delimited line, parsed as comma-delimited: the whole line is one field,
+        // which isn't a valid ID/X/Y row, so it's skipped rather than silently using `;`.
+        let import = parse_with("STE18;1454924.489;8226052.972;25.380", CsvDelimiter::Comma);
+        assert_eq!(import.points.len(), 0);
+        assert_eq!(import.skipped_lines, 1);
+    }
+
+    #[test]
+    fn preview_splits_the_first_lines_by_the_chosen_delimiter() {
+        let text = "ID;X;Y;Z\nP1;100.0;200.0;10.0\nP2;110.0;210.0;11.0\n";
+        let rows = preview(text, CsvDelimiter::Semicolon, 10);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], vec!["ID", "X", "Y", "Z"]);
+        assert_eq!(rows[1], vec!["P1", "100.0", "200.0", "10.0"]);
+    }
+
+    #[test]
+    fn preview_caps_at_max_lines_and_respects_auto() {
+        let text = (1..=15).map(|i| format!("P{i},{i}.0,{i}.0")).collect::<Vec<_>>().join("\n");
+        let rows = preview(&text, CsvDelimiter::Auto, 10);
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[0].len(), 3, "comma should have been auto-detected");
     }
 
     #[test]

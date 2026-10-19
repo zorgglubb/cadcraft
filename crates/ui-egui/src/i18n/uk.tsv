@@ -1347,7 +1347,7 @@
 	GSI Carnet	Журнал GSI
 	Import EDIGEO (Land Records)	Імпорт EDIGEO (кадастр)
 	Import GSI Carnet	Імпортувати журнал GSI
-	Import Points (CSV/TXT)	Імпортувати точки (CSV/TXT)
+	Import Points (CSV/TXT)...	Імпортувати точки (CSV/TXT)...
 	Insert Topo Symbol	Вставити топографічний символ
 	Inspect	Перевірити
 	Inspect EDIGEO File	Перевірити файл EDIGEO
@@ -1365,7 +1365,7 @@
 	Point: Projection on Alignment	Точка: проєкція на вісь
 	Points	Точки
 	Points (CSV)	Точки (CSV)
-	Points CSV/TXT	Точки CSV/TXT
+	Points CSV/TXT...	Точки CSV/TXT...
 	Projection	Проєкція
 	Radiation	Полярна зйомка
 	Refresh	Оновити
@@ -1468,3 +1468,12 @@
 	All fields	Усі поля
 	{n} row(s)	{n} рядок(ів)
 	Table removed from {n} entity(ies)	Таблицю видалено з {n} об'єкт(ів)
+	Delimiter	Роздільник
+	Comma (,)	Кома (,)
+	Semicolon (;)	Крапка з комою (;)
+	Colon (:)	Двокрапка (:)
+	Space	Пробіл
+	Tab	Табуляція
+	Show code label	Показувати підпис коду
+	Imported {n} point(s)	Імпортовано {n} точок(и)
+	Preview Points CSV/TXT	Попередній перегляд точок CSV/TXT

@@ -251,6 +251,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // headless build), this falls through unhandled and the engine reports the ordinary
         // "`path` is required" error. A successful import brings the new geometry into view, the
         // same way opening a drawing does.
+        // TOPO.IMPORT_POINTS is the one exception: it needs a delimiter, a layer and a block
+        // chosen first (the Import Points dialog, with its own live preview), so once the file
+        // is picked this opens that instead of running the import right away.
         "topo.import_gsi" | "topo.import_points" | "plan.import_shp" | "plan.import_image" if no_path => {
             let pick = app.services.pick_open.as_ref()?;
             let filters = match id {
@@ -260,6 +263,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 _ => crate::IMAGE_FILTERS,
             };
             let Some(path) = pick(filters) else { return Some(Ok(Value::Null)) };
+            if id == "topo.import_points" {
+                crate::importpointsdlg::open(app, path);
+                return Some(Ok(Value::Null));
+            }
             let r = app.run(id, json!({ "path": path }));
             if r.is_ok() {
                 app.canvas.zoom_pending = true;

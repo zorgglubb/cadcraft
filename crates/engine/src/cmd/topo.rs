@@ -7,6 +7,16 @@
 //! each imported point becomes a [`CADCRAFT_TCPOINT`](TCPOINT_BLOCK) block reference carrying its
 //! matricule/id, altitude and code as MAT/ALT/COD attributes - real entity data that survives in
 //! the drawing and shows up in Properties - rather than a bare POINT plus a loose text label.
+//!
+//! The point symbol (circle + cross) sits on layer `0`, so it floats to whichever layer the
+//! block reference itself is inserted on - `topo.import_points`'s own `layer` param, created if
+//! it doesn't exist yet. COD/MAT/ALT are drawn from each one's own attribute *definition*, laid
+//! out around the point (COD top-left, MAT top-right, ALT bottom-right) and each on its own
+//! dedicated layer (`TOPOCOD`/`TOPOMAT`/`TOPOALT`) rather than layer `0`: AutoCAD/CADCraft only
+//! lets an attribute float to the reference's layer when its definition is on layer `0`, so
+//! giving each one a real layer of its own is what makes, say, turning `TOPOMAT` off hide every
+//! point's MAT text and nothing else (`crates/render/src/lib.rs`'s `insert` resolves each
+//! attribute against its own definition's properties, not the reference's).
 
 use cadcraft_doc::{EntityKind, HAlign, Handle, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
@@ -39,13 +49,48 @@ pub fn specs() -> Vec<CommandSpec> {
                  with its id/matricule, altitude and code as MAT/ALT/COD attributes (`label: false` hides \
                  the visible code text; the attributes themselves are kept either way).",
         ),
-        CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)", run_import_points)
-            .menu(&["Topo Calculations", "Import", "Points CSV/TXT"])
+        CommandSpec::new("topo.import_points", "Import Points (CSV/TXT)...", run_import_points)
+            .menu(&["Topo Calculations", "Import", "Points CSV/TXT..."])
             .params(
-                "{path: string, label?: bool} - each point becomes a CADCRAFT_TCPOINT block reference with \
-                 its id/matricule, altitude and code as MAT/ALT/COD attributes.",
+                "{path: string, label?: bool, layer?: string (created if missing; default: the \
+                 current layer), block?: string (the block definition to insert each point as - \
+                 created the first time it's used, default \"CADCRAFT_TCPOINT\"), \
+                 delimiter?: \"auto\"|\"comma\"|\"semicolon\"|\"colon\"|\"space\"|\"tab\" (default \"auto\")} \
+                 - each point becomes a `block` reference with its id/matricule, altitude and code \
+                 as MAT/ALT/COD attributes.",
             ),
+        // No menu entry: the Import Points dialog's own preview grid, recomputed as the person
+        // changes the delimiter - never touches the drawing.
+        CommandSpec::new("topo.preview_points_csv", "Preview Points CSV/TXT", run_preview_points_csv)
+            .params(
+                "{path: string, delimiter?: \"auto\"|\"comma\"|\"semicolon\"|\"colon\"|\"space\"|\"tab\" \
+                 (default \"auto\"), lines?: number (default 10)} → {rows: [[string]]}",
+            )
+            .noundo(),
     ]
+}
+
+/// Maps the import dialog's delimiter choice (also the `delimiter` JSON param) to
+/// `cadcraft_topo_io`'s own enum; unrecognised text falls back to `Auto` rather than erroring,
+/// since this only ever changes how a file is split, never whether the import succeeds.
+fn csv_delimiter(s: Option<&str>) -> csv_points::CsvDelimiter {
+    match s.unwrap_or("auto").to_ascii_lowercase().as_str() {
+        "comma" | "," => csv_points::CsvDelimiter::Comma,
+        "semicolon" | ";" => csv_points::CsvDelimiter::Semicolon,
+        "colon" | ":" => csv_points::CsvDelimiter::Colon,
+        "space" => csv_points::CsvDelimiter::Space,
+        "tab" | "\t" => csv_points::CsvDelimiter::Tab,
+        _ => csv_points::CsvDelimiter::Auto,
+    }
+}
+
+fn run_preview_points_csv(_s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.preview_points_csv";
+    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
+    let lines = p.get("lines").and_then(Value::as_u64).map_or(10, |n| n.clamp(1, 100) as usize);
+    let text = std::fs::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let rows = csv_points::preview(&text, csv_delimiter(str_param(p, "delimiter")), lines);
+    Ok(json!({ "rows": rows }))
 }
 
 pub(crate) fn vec3_req(cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
@@ -127,26 +172,46 @@ fn collect_handles(out: &mut Vec<Value>, result: &Value) {
     }
 }
 
-/// Builds the CADCRAFT_TCPOINT block the first time it's needed: a small cross inside a circle,
-/// plus COD (visible), MAT and ALT (invisible by default - still real attribute data, just not
-/// cluttering the drawing) attribute definitions.
-fn ensure_tcpoint_block(s: &mut Session) -> Result<()> {
-    if s.doc()?.blocks.keys().any(|k| k.eq_ignore_ascii_case(TCPOINT_BLOCK)) {
+/// The dedicated layers COD/MAT/ALT are defined on (never layer `0`, so each stays on its own
+/// layer rather than floating to whatever layer a given point block is inserted on - see the
+/// module doc comment).
+const TOPOCOD_LAYER: &str = "TOPOCOD";
+const TOPOMAT_LAYER: &str = "TOPOMAT";
+const TOPOALT_LAYER: &str = "TOPOALT";
+
+/// Builds the point block named `block` the first time it's needed (a no-op if a block by that
+/// name already exists - letting a person reuse one of their own instead of always getting
+/// `CADCRAFT_TCPOINT`): a small cross inside a circle on layer `0` (so it floats to whichever
+/// layer the reference itself is inserted on), plus COD (top-left), MAT (top-right) and ALT
+/// (bottom-right) attribute definitions, each on its own layer (created if missing) and each
+/// visible except ALT, whose value is also shown as the point's elevation via COD/MAT - kept
+/// anyway so it survives as real, editable entity data.
+fn ensure_tcpoint_block(s: &mut Session, block: &str) -> Result<()> {
+    if s.doc()?.blocks.keys().any(|k| k.eq_ignore_ascii_case(block)) {
         return Ok(());
     }
+    for layer in [TOPOCOD_LAYER, TOPOMAT_LAYER, TOPOALT_LAYER] {
+        s.doc_mut()?.ensure_layer(layer);
+    }
     let mut handles: Vec<Value> = Vec::new();
-    let mut draw = |s: &mut Session, cmd: &str, params: Value| -> Result<()> {
+    let mut draw = |s: &mut Session, cmd: &str, params: Value, layer: Option<&str>| -> Result<()> {
         let r = s.execute(cmd, &params)?;
         collect_handles(&mut handles, &r);
+        if let Some(layer) = layer
+            && let Some(h) = r.get("handle").and_then(Value::as_str).and_then(Handle::parse_hex)
+        {
+            let layer = layer.to_string();
+            s.doc_mut()?.modify_entity(h, move |e| e.common.layer = layer)?;
+        }
         Ok(())
     };
-    draw(s, "circle", json!({ "center": [0.0, 0.0], "radius": 0.2 }))?;
-    draw(s, "line", json!({ "points": [[-0.3, 0.0], [0.3, 0.0]] }))?;
-    draw(s, "line", json!({ "points": [[0.0, -0.3], [0.0, 0.3]] }))?;
-    draw(s, "attdef", json!({ "tag": "COD", "prompt": "Code", "default": "", "at": [0.4, 0.1], "height": 0.15 }))?;
-    draw(s, "attdef", json!({ "tag": "MAT", "prompt": "Matricule", "default": "", "at": [0.4, -0.15], "height": 0.15, "invisible": true }))?;
-    draw(s, "attdef", json!({ "tag": "ALT", "prompt": "Altitude", "default": "", "at": [0.4, -0.4], "height": 0.15, "invisible": true }))?;
-    s.execute("block", &json!({ "name": TCPOINT_BLOCK, "base": [0.0, 0.0], "handles": handles, "keep": "delete" }))?;
+    draw(s, "circle", json!({ "center": [0.0, 0.0], "radius": 0.2 }), None)?;
+    draw(s, "line", json!({ "points": [[-0.3, 0.0], [0.3, 0.0]] }), None)?;
+    draw(s, "line", json!({ "points": [[0.0, -0.3], [0.0, 0.3]] }), None)?;
+    draw(s, "attdef", json!({ "tag": "COD", "prompt": "Code", "default": "", "at": [-0.4, 0.3], "height": 0.15 }), Some(TOPOCOD_LAYER))?;
+    draw(s, "attdef", json!({ "tag": "MAT", "prompt": "Matricule", "default": "", "at": [0.4, 0.3], "height": 0.15 }), Some(TOPOMAT_LAYER))?;
+    draw(s, "attdef", json!({ "tag": "ALT", "prompt": "Altitude", "default": "", "at": [0.4, -0.3], "height": 0.15 }), Some(TOPOALT_LAYER))?;
+    s.execute("block", &json!({ "name": block, "base": [0.0, 0.0], "handles": handles, "keep": "delete" }))?;
     Ok(())
 }
 
@@ -156,8 +221,19 @@ fn ensure_tcpoint_block(s: &mut Session) -> Result<()> {
 /// Properties - instead of the plain POINT + loose text label [`insert_point`] uses. Mirrors
 /// `insert_point`'s JSON result shape so callers' `points` arrays don't have to change; `mat` is
 /// added alongside the existing fields.
-pub(crate) fn insert_tcpoint(s: &mut Session, coord: Vec3, mat: Option<String>, code: Option<String>, label: bool) -> Result<Value> {
-    ensure_tcpoint_block(s)?;
+pub(crate) fn insert_tcpoint(
+    s: &mut Session,
+    coord: Vec3,
+    mat: Option<String>,
+    code: Option<String>,
+    label: bool,
+    block: &str,
+    layer: Option<&str>,
+) -> Result<Value> {
+    ensure_tcpoint_block(s, block)?;
+    if let Some(layer) = layer {
+        s.doc_mut()?.ensure_layer(layer);
+    }
 
     let mut attribs = serde_json::Map::new();
     if let Some(c) = &code {
@@ -168,12 +244,20 @@ pub(crate) fn insert_tcpoint(s: &mut Session, coord: Vec3, mat: Option<String>, 
     }
     attribs.insert("ALT".into(), Value::String(format!("{:.3}", coord.z)));
 
-    let out = s.execute("insert", &json!({ "name": TCPOINT_BLOCK, "at": [coord.x, coord.y], "attribs": Value::Object(attribs) }))?;
+    let out = s.execute("insert", &json!({ "name": block, "at": [coord.x, coord.y], "attribs": Value::Object(attribs) }))?;
     let handle = out.get("handle").and_then(Value::as_str).map(str::to_string);
+    let hd = handle.as_deref().and_then(Handle::parse_hex);
+
+    // `insert` always uses the current layer (CLAYER), so the reference's own layer - which the
+    // point symbol (on layer 0) then floats to - is set here instead of asking `insert` for it.
+    if let (Some(layer), Some(hd)) = (layer, hd) {
+        let layer = layer.to_string();
+        s.doc_mut()?.modify_entity(hd, move |e| e.common.layer = layer)?;
+    }
 
     // COD is visible by default (matching the old label's behaviour); `label: false` hides it,
     // but MAT/ALT stay in the entity's data either way - this only affects what's drawn.
-    if !label && let Some(hd) = handle.as_deref().and_then(Handle::parse_hex) {
+    if !label && let Some(hd) = hd {
         let _ = s.doc_mut()?.modify_entity(hd, |e| {
             if let EntityKind::Insert(ins) = &mut e.kind
                 && let Some(a) = ins.attribs.iter_mut().find(|a| a.tag == "COD")
@@ -271,7 +355,7 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
                 radiation(station, vo_gon, obs).map_err(|e| topo_err("topo.import_gsi", e))?
             }
         };
-        points.push(insert_tcpoint(s, coord, Some(gp.id.clone()), code, label)?);
+        points.push(insert_tcpoint(s, coord, Some(gp.id.clone()), code, label, TCPOINT_BLOCK, None)?);
     }
 
     Ok(json!({
@@ -288,22 +372,27 @@ fn run_import_gsi(s: &mut Session, p: &Value) -> Result<Value> {
 /// or without a header, `;`/`,`/tab/space delimited) and inserts each point as-is into the
 /// active document - no station or polar calculation involved, unlike [`run_import_gsi`].
 fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").ok_or_else(|| bad("topo.import_points", "`path` is required"))?;
+    const CMD: &str = "topo.import_points";
+    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
     let label = bool_or(p, "label", true);
+    let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(TCPOINT_BLOCK).to_string();
+    let layer = str_param(p, "layer").map(str::trim).filter(|n| !n.is_empty() && *n != "0").map(str::to_string);
 
-    let text = std::fs::read_to_string(path).map_err(|e| bad("topo.import_points", format!("{path}: {e}")))?;
-    let import = csv_points::parse(&text);
+    let text = std::fs::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let import = csv_points::parse_with(&text, csv_delimiter(str_param(p, "delimiter")));
 
     let mut points = Vec::with_capacity(import.points.len());
     for cp in &import.points {
         let coord = Vec3::new(cp.x, cp.y, cp.z.unwrap_or(0.0));
         let code = cp.code.clone().or_else(|| Some(cp.id.clone()));
-        points.push(insert_tcpoint(s, coord, Some(cp.id.clone()), code, label)?);
+        points.push(insert_tcpoint(s, coord, Some(cp.id.clone()), code, label, &block, layer.as_deref())?);
     }
 
     Ok(json!({
         "importedPoints": points.len(),
         "skippedLines": import.skipped_lines,
+        "layer": layer,
+        "block": block,
         "points": points,
     }))
 }
@@ -517,6 +606,90 @@ mod tests {
         let cod = ins.attribs.iter().find(|a| a.tag == "COD").expect("COD attribute should still be attached");
         assert!(cod.invisible, "label: false should hide the code text");
         assert_eq!(cod.text.value, "BORNE", "but the value itself should be kept");
+    }
+
+    #[test]
+    fn import_points_uses_a_chosen_layer_and_block_and_creates_both() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-layer-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;10.0;BORNE\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy(), "layer": "LEVE1", "block": "MYPOINT" }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        let pts = out["points"].as_array().expect("points array");
+
+        let doc = s.doc().expect("doc");
+        assert!(doc.layer("LEVE1").is_some(), "the chosen layer should have been created");
+        assert!(doc.blocks.keys().any(|k| k.eq_ignore_ascii_case("MYPOINT")), "the chosen block should have been created");
+        let handle = super::Handle::parse_hex(pts[0]["handle"].as_str().expect("handle")).expect("valid handle");
+        let e = doc.entity(handle).expect("entity");
+        assert_eq!(e.common.layer, "LEVE1");
+        let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity") };
+        assert_eq!(ins.block, "MYPOINT");
+    }
+
+    #[test]
+    fn import_points_puts_cod_mat_alt_definitions_each_on_their_own_layer() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-sublayers-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;10.0;BORNE\n").expect("writing the temp points file should succeed");
+        s.execute("topo.import_points", &json!({ "path": path.to_string_lossy() })).expect("import should succeed");
+        let _ = std::fs::remove_file(&path);
+
+        let doc = s.doc().expect("doc");
+        let blk = doc.block(super::TCPOINT_BLOCK).expect("the TCPOINT block should exist");
+        let layer_of = |tag: &str| {
+            blk.entities
+                .iter()
+                .find_map(|e| if let super::EntityKind::AttDef(a) = &e.kind { (a.tag == tag).then(|| e.common.layer.clone()) } else { None })
+        };
+        assert_eq!(layer_of("COD"), Some("TOPOCOD".to_string()));
+        assert_eq!(layer_of("MAT"), Some("TOPOMAT".to_string()));
+        assert_eq!(layer_of("ALT"), Some("TOPOALT".to_string()));
+        for layer in ["TOPOCOD", "TOPOMAT", "TOPOALT"] {
+            assert!(doc.layer(layer).is_some(), "{layer} should have been created");
+        }
+        // The point symbol itself stays on layer 0, so it floats to the reference's own layer.
+        let (circles, others): (Vec<_>, Vec<_>) =
+            blk.entities.iter().partition(|e| matches!(e.kind, super::EntityKind::Circle(_) | super::EntityKind::Line(_)));
+        assert!(!circles.is_empty());
+        assert!(circles.iter().all(|e| e.common.layer == "0"));
+        assert_eq!(others.len(), 3, "COD/MAT/ALT attribute definitions");
+    }
+
+    #[test]
+    fn import_points_respects_an_explicit_delimiter_even_when_auto_would_differ() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-points-delim-{}.csv", std::process::id()));
+        // Comma-separated, but with semicolons inside a trailing comment-like field; forcing
+        // comma avoids any ambiguity auto-detection might otherwise have to resolve.
+        std::fs::write(&path, "P1,100.0,200.0,10.0\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy(), "delimiter": "comma" }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        assert_eq!(out["importedPoints"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn preview_points_csv_reflects_the_chosen_delimiter() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-points-preview-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z\nP1;100.0;200.0;10.0\nP2;110.0;210.0;11.0\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.preview_points_csv", &json!({ "path": path.to_string_lossy(), "delimiter": "semicolon", "lines": 10 }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("preview should succeed");
+        let rows = out["rows"].as_array().expect("rows array");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>(), vec!["ID", "X", "Y", "Z"]);
+    }
+
+    #[test]
+    fn preview_points_csv_reports_a_missing_file_as_an_error_not_a_panic() {
+        let mut s = session_with_doc();
+        assert!(s.execute("topo.preview_points_csv", &json!({ "path": "/nonexistent/does-not-exist.csv" })).is_err());
     }
 
     #[test]
