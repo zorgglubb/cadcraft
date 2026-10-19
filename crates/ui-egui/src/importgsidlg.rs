@@ -59,6 +59,8 @@ pub struct State {
     ref_delimiter: String,
     ref_matched: usize,
     label: bool,
+    /// The last "Compute" run's VO/σ, shown once coordinates have been previewed.
+    last_vo: Option<(f64, Option<f64>)>,
 }
 
 fn opt_num(v: &Value, key: &str) -> Option<f64> {
@@ -80,6 +82,7 @@ impl State {
             ref_delimiter: "auto".into(),
             ref_matched: 0,
             label: true,
+            last_vo: None,
         }
     }
 }
@@ -189,6 +192,76 @@ fn merge_references(app: &mut CadApp, st: &mut State) {
     }
 }
 
+/// Previews every angle+distance row's coordinates with the station/orientation currently filled
+/// in (TOPO.COMPUTE_RADIATION - never touches the drawing), updating their X/Y/Z in place so the
+/// person can see and export the result before committing to Import.
+fn compute_coordinates(app: &mut CadApp, st: &mut State) {
+    let (Some(x), Some(y)) = (num(&st.station_x), num(&st.station_y)) else { return };
+    let station = json!([x, y, num(&st.station_z).unwrap_or(0.0)]);
+
+    let mut params = serde_json::Map::new();
+    params.insert("station".into(), station);
+    if st.from_references {
+        let refs: Vec<Value> = usable_references(st)
+            .iter()
+            .map(|r| json!({ "point": [r.x.unwrap_or(0.0), r.y.unwrap_or(0.0), r.z.unwrap_or(0.0)], "hzReading": r.hz.unwrap_or(0.0) }))
+            .collect();
+        if refs.is_empty() {
+            return;
+        }
+        params.insert("references".into(), Value::Array(refs));
+    } else {
+        let Some(vo) = num(&st.vo) else { return };
+        params.insert("vo".into(), json!(vo));
+    }
+
+    // Indices of every row this can actually compute (a full angle+distance shot), in the same
+    // order the observations are sent - so the response's `points[i]` maps straight back to
+    // `st.rows[indices[i]]`.
+    let indices: Vec<usize> =
+        st.rows.iter().enumerate().filter(|(_, r)| r.hz.is_some() && r.vz.is_some() && r.dist.is_some()).map(|(i, _)| i).collect();
+    if indices.is_empty() {
+        return;
+    }
+    let observations: Vec<Value> = indices
+        .iter()
+        .map(|&i| {
+            let r = &st.rows[i];
+            json!({ "hzReading": r.hz, "zenith": r.vz, "slopeDistance": r.dist })
+        })
+        .collect();
+    params.insert("observations".into(), Value::Array(observations));
+
+    if let Ok(v) = app.run("topo.compute_radiation", Value::Object(params)) {
+        st.last_vo = Some((v["vo"].as_f64().unwrap_or(0.0), v["sigma"].as_f64()));
+        if let Some(points) = v["points"].as_array() {
+            for (&i, p) in indices.iter().zip(points) {
+                st.rows[i].x = opt_num(p, "x");
+                st.rows[i].y = opt_num(p, "y");
+                st.rows[i].z = opt_num(p, "z");
+            }
+        }
+    }
+}
+
+/// Writes every row that has coordinates (computed or already in the carnet) to a CSV/TXT file,
+/// the same `ID;X;Y;Z;CODE` shape TOPO.IMPORT_POINTS/TOPO.PARSE_POINTS_CSV read back.
+fn export_csv(app: &mut CadApp, st: &State) {
+    let Some(pick) = app.services.pick_save.as_ref() else { return };
+    let Some(path) = pick("points.csv", crate::POINTS_FILTERS) else { return };
+    let mut out = String::from("ID;X;Y;Z;CODE\n");
+    let mut written = 0usize;
+    for r in &st.rows {
+        let (Some(x), Some(y)) = (r.x, r.y) else { continue };
+        out.push_str(&format!("{};{x};{y};{};{}\n", r.id, r.z.unwrap_or(0.0), r.code.as_deref().unwrap_or("")));
+        written += 1;
+    }
+    match std::fs::write(&path, out) {
+        Ok(()) => app.session.echo(crate::tf!("{n} point(s) exported to {path}", n = written, path = path.as_str())),
+        Err(e) => app.session.echo(e.to_string()),
+    }
+}
+
 fn use_as_station(st: &mut State, i: usize) {
     for r in &mut st.rows {
         if r.role == Role::Station {
@@ -216,7 +289,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         return;
     };
 
-    let (mut import, mut close, mut pick_refs, mut delimiter_changed) = (false, false, false, false);
+    let (mut import, mut close, mut pick_refs, mut delimiter_changed, mut compute, mut export) = (false, false, false, false, false, false);
     let mut row_action: Option<(usize, Role)> = None;
     egui::Window::new(crate::tl!("Import GSI Carnet")).open(open).resizable(true).collapsible(false).default_size(vec2(640.0, 560.0)).show(
         ctx,
@@ -320,10 +393,20 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.text_edit_singleline(&mut st.vo);
                 });
             }
+            ui.horizontal(|ui| {
+                compute = ui.add_enabled(ready(&st), egui::Button::new(crate::tl!("Compute"))).clicked();
+                if let Some((vo, sigma)) = st.last_vo {
+                    ui.label(match sigma {
+                        Some(s) => crate::tf!("Computed VO: {vo} gon (σ {sigma})", vo = format!("{vo:.4}"), sigma = format!("{s:.4}")),
+                        None => crate::tf!("VO: {vo} gon", vo = format!("{vo:.4}")),
+                    });
+                }
+            });
             ui.checkbox(&mut st.label, crate::tl!("Show code label"));
             ui.separator();
             ui.horizontal(|ui| {
                 import = ui.add_enabled(ready(&st), egui::Button::new(crate::tl!("Import"))).clicked();
+                export = ui.button(crate::tl!("Export CSV/TXT...")).clicked();
                 close = ui.button(crate::tl!("Close")).clicked();
             });
         },
@@ -347,6 +430,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     if delimiter_changed {
         merge_references(app, &mut st);
+    }
+    if compute {
+        compute_coordinates(app, &mut st);
+    }
+    if export {
+        export_csv(app, &st);
     }
 
     if import {

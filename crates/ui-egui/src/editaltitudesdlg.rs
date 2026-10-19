@@ -34,7 +34,6 @@ pub struct State {
     pub mode: Mode,
     pub constant: String,
     pub decimals: u32,
-    pub last_result: Option<usize>,
 }
 
 impl Default for State {
@@ -50,7 +49,6 @@ impl Default for State {
             mode: Mode::Keep3D,
             constant: "0.0000".into(),
             decimals: 2,
-            last_result: None,
         }
     }
 }
@@ -177,11 +175,6 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.end_row();
         });
 
-        if let Some(n) = st.last_result {
-            ui.separator();
-            ui.label(crate::tf!("{n} point(s) updated", n = n));
-        }
-
         ui.separator();
         ui.horizontal(|ui| {
             run = ui.add_enabled(ready(&st), egui::Button::new(crate::tl!("OK"))).clicked();
@@ -222,9 +215,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         match &r {
             Ok(v) => {
                 let n = v["updated"].as_u64().unwrap_or(0) as usize;
-                st.last_result = Some(n);
                 app.session.echo(crate::tf!("{n} point(s) updated", n = n));
-                app.canvas.zoom_pending = true;
+                // OK closes the dialog on success - no re-zoom: every edited point was already on
+                // screen (only its elevation changed, never its X/Y), so keeping the current view
+                // is less disruptive than recentring on them. `close` was already handled above
+                // this frame, so closing here sets `*open` directly instead.
+                *open = false;
             }
             Err(e) => app.session.echo(e.clone()),
         }

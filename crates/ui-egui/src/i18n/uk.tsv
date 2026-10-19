@@ -1535,8 +1535,11 @@
 	Mark as reference	Позначити як орієнтир
 	Mark as measured point	Позначити як виміряну точку
 	Import known references...	Імпортувати відомі орієнтири...
+	Export CSV/TXT...	Експортувати у CSV/TXT...
+	{n} point(s) exported to {path}	Експортовано точок: {n} до {path}
 	{n} matched	{n} збігів
 	Parse Points CSV/TXT	Розібрати точки CSV/TXT
+	Compute Radiation (preview)	Обчислити полярну зйомку (попередній перегляд)
 	Station X/Y are required	Потрібні координати X/Y станції
 	At least one observation is required	Потрібне принаймні одне спостереження
 	Inserted {n} point(s)	Вставлено {n} точок(и)

@@ -33,13 +33,17 @@ use cadcraft_geom::{Polyline, Vec2};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.merge_parcels", "Merge Parcels", run_merge_parcels)
             .menu(&["Topo 2D", "Foncier", "Merge Parcels"])
-            .params("{handles: [handle, ...]} (closed polylines or regions, at least 2) → {handle, area}"),
+            .params("{handles: [handle, ...]} (closed polylines or regions, at least 2) → {handle, area}")
+            // Menu/toolbar (no parameters): select the parcels on screen (closed polylines),
+            // Enter to run once at least 2 are picked - the usual select-objects-then-Enter
+            // sequence, not a popup form, matching "programmatic calls never open dialogs".
+            .interactive(|_| Ok(Box::new(MergeParcelsM::default()))),
         CommandSpec::new("topo.parcel_state", "Parcel State (listing)", run_parcel_state)
             .menu(&["Topo 2D", "Foncier", "Parcel State"])
             .params("{layer?: string, path?: string (also writes a CSV)} → {parcels: [{reference, handle, layer, area}], path?}")
@@ -177,6 +181,45 @@ fn run_merge_parcels(s: &mut Session, p: &Value) -> Result<Value> {
     s.doc_mut()?.modify_entity(handle, |e| e.common.layer = layer).map_err(|e| bad(CMD, e.to_string()))?;
 
     Ok(json!({ "handle": handle.hex(), "area": area }))
+}
+
+/// TOPO.MERGE_PARCELS at the command line: repeated "Select objects to merge" picks (closed
+/// polylines/regions), Enter to run once at least 2 are selected.
+#[derive(Default)]
+struct MergeParcelsM {
+    objs: Vec<Handle>,
+}
+
+impl Interactive for MergeParcelsM {
+    fn name(&self) -> &'static str {
+        "TOPO.MERGE_PARCELS"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        Prompt::new("Select objects to merge", Accept::SELECT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match i {
+            Input::Pick(hs) => {
+                for h in hs {
+                    if !self.objs.contains(&h) {
+                        self.objs.push(h);
+                    }
+                }
+                Ok(Step::Continue)
+            }
+            Input::Enter => {
+                if self.objs.len() < 2 {
+                    s.echo("Select at least 2 parcels to merge.");
+                    return Ok(Step::Continue);
+                }
+                let handles: Vec<Value> = self.objs.iter().map(|h| json!(h.hex())).collect();
+                run_merge_parcels(s, &json!({ "handles": handles }))?;
+                Ok(Step::Done)
+            }
+            Input::Cancel => Ok(Step::Cancel),
+            _ => Ok(Step::Continue),
+        }
+    }
 }
 
 /// Escapes a field for a `;`-delimited CSV cell, matching `topo.listing_points`'s convention.
@@ -360,6 +403,34 @@ mod tests {
         let a = square(&mut s, 0.0, 0.0, 10.0, 10.0);
         let out = s.execute("topo.merge_parcels", &json!({ "handles": [a] }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn merge_parcels_runs_interactively_from_the_menu() {
+        use cadcraft_doc::Handle;
+
+        use crate::Input;
+
+        let mut s = session_with_doc();
+        let a = square(&mut s, 0.0, 0.0, 10.0, 10.0);
+        let b = square(&mut s, 10.0, 0.0, 20.0, 10.0);
+        let ha = Handle::parse_hex(&a).expect("valid handle");
+        let hb = Handle::parse_hex(&b).expect("valid handle");
+
+        // The menu/toolbar/command-line route used to fail with "`handles` is required".
+        s.start("topo.merge_parcels").expect("starting interactively should succeed");
+        assert!(s.prompt_text().contains("Select objects to merge"), "{}", s.prompt_text());
+        s.input(Input::Enter).expect("Enter with nothing picked yet should be tolerated");
+        assert!(s.running.is_some(), "must not finish with fewer than 2 parcels picked");
+        s.input(Input::Pick(vec![ha])).expect("picking the first parcel should succeed");
+        assert!(s.running.is_some());
+        s.input(Input::Pick(vec![hb])).expect("picking the second parcel should succeed");
+        s.input(Input::Enter).expect("Enter with 2 parcels picked should finish the command");
+        assert!(s.running.is_none());
+
+        // The two original squares are gone, replaced by one merged parcel.
+        let merged: Vec<_> = s.doc().expect("doc").model.iter().filter(|e| matches!(e.kind, cadcraft_doc::EntityKind::LwPolyline(_))).collect();
+        assert_eq!(merged.len(), 1, "expected exactly one merged parcel left");
     }
 
     #[test]

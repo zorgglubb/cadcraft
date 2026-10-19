@@ -104,6 +104,16 @@ pub fn specs() -> Vec<CommandSpec> {
                  (default \"auto\")} → {points: [{id, x, y, z, code}], skippedLines}",
             )
             .noundo(),
+        // No menu entry: the Import GSI dialog's "Compute" button, previewing every angle+distance
+        // row's coordinates (once a station/orientation is known) before anything is imported -
+        // touches nothing in the drawing, unlike `topo.radiation` itself.
+        CommandSpec::new("topo.compute_radiation", "Compute Radiation (preview)", run_compute_radiation)
+            .params(
+                "{station: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
+                 observations: [{hzReading, zenith, slopeDistance, instrumentHeight?, targetHeight?, code?}]} \
+                 → {vo, sigma, points: [{x, y, z, code}]}",
+            )
+            .noundo(),
     ]
 }
 
@@ -471,6 +481,31 @@ fn run_cheminement(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Previews what `topo.radiation` would compute for each observation - same station/VO
+/// resolution, same per-observation `radiation()` call - but returns bare coordinates instead of
+/// inserting anything, for a dialog that wants to show the result before committing to it.
+fn run_compute_radiation(_s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.compute_radiation";
+    let station = vec3_req(CMD, p, "station")?;
+    let (vo_gon, sigma) = resolve_vo(CMD, station, p)?;
+
+    let obs_arr = p.get("observations").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`observations` (array) is required"))?;
+    let mut points = Vec::with_capacity(obs_arr.len());
+    for o in obs_arr {
+        let obs = RadiationObservation {
+            hz_reading_gon: f64_req(CMD, o, "hzReading")?,
+            zenith_gon: f64_req(CMD, o, "zenith")?,
+            slope_distance: f64_req(CMD, o, "slopeDistance")?,
+            instrument_height: f64_or(o, "instrumentHeight", 0.0),
+            target_height: f64_or(o, "targetHeight", 0.0),
+        };
+        let coord = radiation(station, vo_gon, obs).map_err(|e| topo_err(CMD, e))?;
+        points.push(json!({ "x": coord.x, "y": coord.y, "z": coord.z, "code": str_param(o, "code") }));
+    }
+
+    Ok(json!({ "vo": vo_gon, "sigma": sigma, "points": points }))
+}
+
 /// Imports a Leica GSI-8/16 carnet from disk. Two kinds of line insert directly, no station
 /// needed: a line already carrying X/Y/Z (WI 81/82/83 or the GeoMax station words 84/85/86) goes
 /// straight in as a coordinate; a line with a full radiation shot (Hz, Vz and slope distance all
@@ -589,6 +624,31 @@ mod tests {
         assert!((pts[0]["x"].as_f64().unwrap_or(f64::NAN) - 1050.0).abs() < 1e-6);
         assert!((pts[0]["y"].as_f64().unwrap_or(f64::NAN) - 1000.0).abs() < 1e-6);
         assert!(pts[0]["labelHandle"].is_string(), "a coded point should get a label");
+    }
+
+    #[test]
+    fn compute_radiation_matches_radiation_but_inserts_nothing() {
+        let mut s = session_with_doc();
+        let before = s.doc().expect("doc").model.iter().count();
+
+        let out = s
+            .execute(
+                "topo.compute_radiation",
+                &json!({
+                    "station": [1000.0, 1000.0, 100.0],
+                    "vo": 0.0,
+                    "observations": [{ "hzReading": 100.0, "zenith": 100.0, "slopeDistance": 50.0, "code": "P1" }]
+                }),
+            )
+            .expect("compute_radiation should succeed");
+        let pts = out["points"].as_array().expect("points array");
+        assert_eq!(pts.len(), 1);
+        assert!((pts[0]["x"].as_f64().unwrap_or(f64::NAN) - 1050.0).abs() < 1e-6);
+        assert!((pts[0]["y"].as_f64().unwrap_or(f64::NAN) - 1000.0).abs() < 1e-6);
+        assert_eq!(pts[0]["code"].as_str(), Some("P1"));
+
+        let after = s.doc().expect("doc").model.iter().count();
+        assert_eq!(before, after, "a preview must not add anything to the drawing");
     }
 
     #[test]

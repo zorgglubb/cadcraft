@@ -9,10 +9,11 @@
 //! tested; silently pretending it updates on every point move would not be.
 
 use cadcraft_doc::{EntityKind, Handle, RawTag};
+use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 /// The xdata "application" name marking a label this command created and can refresh.
 const APPID: &str = "CADCRAFT_TOPO_LABEL";
@@ -21,9 +22,75 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("topo.label_elevation", "Label: Point Elevation", run_label_elevation)
             .menu(&["Topo 2D", "Labels", "Elevation"])
-            .params("{point: handle, at?: [x,y,z], prefix?: string, decimals?: integer, textHeight?: number}"),
+            .params("{point: handle, at?: [x,y,z], prefix?: string, decimals?: integer, textHeight?: number}")
+            // Menu/toolbar (no parameters): pick the source point on screen, then where its
+            // label should go, rather than erroring on a missing `point` - "programmatic calls
+            // never open dialogs" (CLAUDE.md) still holds, this is the interactive prompt
+            // sequence every click-driven command uses, not a popup form.
+            .interactive(|_| Ok(Box::new(LabelElevationM::default()))),
         CommandSpec::new("topo.refresh_labels", "Refresh Elevation Labels", run_refresh_labels).menu(&["Topo 2D", "Labels", "Refresh"]).params("{}"),
     ]
+}
+
+/// TOPO.LABEL_ELEVATION at the command line: "Select point", then "Specify label location"
+/// (Enter takes the command's own default offset).
+#[derive(Default)]
+struct LabelElevationM {
+    point: Option<Handle>,
+}
+
+impl Interactive for LabelElevationM {
+    fn name(&self) -> &'static str {
+        "TOPO.LABEL_ELEVATION"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.point.is_none() { Prompt::new("Select point", Accept::SELECT) } else { Prompt::new("Specify label location", Accept::POINT) }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let Some(point) = self.point else {
+            return Ok(match i {
+                Input::Pick(hs) => {
+                    match hs.iter().find(|&&h| matches!(s.doc().ok().and_then(|d| d.entity(h)).map(|e| &e.kind), Some(EntityKind::Point(_)))) {
+                        Some(&h) => self.point = Some(h),
+                        None if hs.is_empty() => {}
+                        None => s.echo("Object selected is not a point."),
+                    }
+                    Step::Continue
+                }
+                Input::Enter | Input::Cancel => Step::Cancel,
+                _ => Step::Continue,
+            });
+        };
+        match i {
+            Input::Point(p) => {
+                run_label_elevation(s, &json!({ "point": point.hex(), "at": [p.x, p.y] }))?;
+                Ok(Step::Done)
+            }
+            Input::Enter => {
+                run_label_elevation(s, &json!({ "point": point.hex() }))?;
+                Ok(Step::Done)
+            }
+            Input::Cancel => Ok(Step::Cancel),
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        let Some(point) = self.point else { return Vec::new() };
+        let Ok(z) = point_elevation(s, "topo.label_elevation", point) else { return Vec::new() };
+        let text_height = s.doc().map(|d| d.header.f64("TEXTSIZE", 0.2)).unwrap_or(0.2);
+        vec![EntityKind::Text(cadcraft_doc::Text {
+            insert: cadcraft_geom::Vec3::new(c.x, c.y, 0.0),
+            align_pt: None,
+            height: text_height,
+            value: label_text("Z=", 2, z),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadcraft_doc::HAlign::Left,
+            valign: cadcraft_doc::VAlign::Baseline,
+        })]
+    }
 }
 
 fn handle_param(cmd: &str, p: &Value, key: &str) -> Result<Handle> {
@@ -162,6 +229,35 @@ mod tests {
         let h = line["handles"][0].as_str().expect("line handle").to_string();
         let out = s.execute("topo.label_elevation", &json!({ "point": h }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn label_elevation_runs_interactively_from_the_menu() {
+        use cadcraft_doc::Handle;
+
+        use crate::Input;
+
+        let mut s = session_with_doc();
+        let pt = s
+            .execute("topo.point_at", &json!({ "from": [10.0, 20.0, 3.456], "gisement": 0.0, "distance": 0.0, "label": false }))
+            .expect("should succeed");
+        let point_handle = pt["point"]["handle"].as_str().expect("point handle").to_string();
+        let point_h = Handle::parse_hex(&point_handle).expect("valid handle");
+        let line = s.execute("line", &json!({ "points": [[0.0, 0.0], [1.0, 1.0]] })).expect("should succeed");
+        let line_h = Handle::parse_hex(line["handles"][0].as_str().expect("line handle")).expect("valid handle");
+
+        // The menu/toolbar/command-line route used to fail with "`point` is required".
+        s.start("topo.label_elevation").expect("starting interactively should succeed");
+        assert!(s.prompt_text().contains("Select point"), "{}", s.prompt_text());
+        s.input(Input::Pick(vec![line_h])).expect("picking a non-point should be tolerated");
+        assert!(s.running.is_some(), "a non-point pick must not advance the machine");
+        s.input(Input::Pick(vec![point_h])).expect("picking the point should advance the machine");
+        assert!(s.prompt_text().contains("Specify label location"), "{}", s.prompt_text());
+        s.input(Input::Enter).expect("Enter should accept the default label location");
+        assert!(s.running.is_none());
+
+        let texts: Vec<_> = s.doc().expect("doc").model.iter().filter(|e| matches!(e.kind, cadcraft_doc::EntityKind::Text(_))).collect();
+        assert_eq!(texts.len(), 1, "expected one elevation label text");
     }
 
     #[test]
