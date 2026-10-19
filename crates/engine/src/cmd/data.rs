@@ -50,6 +50,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("data.pick_entities", "Pick Entities", run_pick_entities)
             .params("{} (typed/menu only: DATA.PICK_ENTITIES prompts \"Select objects\") → sets Session::table_pick")
             .interactive(|_| Ok(Box::new(TablePickM::default()))),
+        CommandSpec::new("data.search", "Search...", run_search).menu(&["Data", "Search..."]).noundo().params(
+            "{query?: string, table?: string, field?: string} → {rows: [{handle, table, fields: \
+             [{name, kind, value}]}]}. With no `table`, searches every tagged entity's fields; with \
+             `table` but no `field`, searches that table's fields; with both, only that field. An \
+             empty or missing `query` lists every row that matches the `table`/`field` filter.",
+        ),
     ]
 }
 
@@ -184,6 +190,50 @@ fn run_set_attribute(s: &mut Session, p: &Value) -> Result<Value> {
     s.doc_mut()?.modify_entity(handle, move |e| e.common.xdata = xdata).map_err(|e| bad(CMD, e.to_string()))?;
     s.touch();
     ok()
+}
+
+/// Caps how many rows `data.search` ever returns, so a query with no filter on a huge drawing
+/// can't blow up the response (or the spreadsheet-like dialog rendering it).
+const MAX_SEARCH_ROWS: usize = 5000;
+
+fn run_search(s: &mut Session, p: &Value) -> Result<Value> {
+    let table_filter = str_param(p, "table").map(str::to_string);
+    let field_filter = str_param(p, "field").map(str::to_string);
+    let query = str_param(p, "query").unwrap_or_default().trim().to_ascii_lowercase();
+
+    let d = s.doc()?;
+    let mut rows = Vec::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
+    'entities: for store in stores {
+        for e in store.iter() {
+            let Some((table, field_values)) = cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID) else { continue };
+            if table_filter.as_ref().is_some_and(|t| !t.eq_ignore_ascii_case(&table)) {
+                continue;
+            }
+            let def = d.attribute_table(&table);
+            let matches = query.is_empty()
+                || field_values.iter().any(|(k, v)| {
+                    (field_filter.is_none() || field_filter.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(k)))
+                        && v.to_ascii_lowercase().contains(&query)
+                });
+            if !matches {
+                continue;
+            }
+            let fields: Vec<Value> = field_values
+                .iter()
+                .filter(|(k, _)| field_filter.is_none() || field_filter.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(k)))
+                .map(|(k, v)| {
+                    let kind = def.and_then(|d| d.fields.iter().find(|f| f.name == *k)).map_or("character", |f| kind_label(f.kind));
+                    json!({ "name": k, "kind": kind, "value": v })
+                })
+                .collect();
+            rows.push(json!({ "handle": e.handle.hex(), "table": table, "fields": fields }));
+            if rows.len() >= MAX_SEARCH_ROWS {
+                break 'entities;
+            }
+        }
+    }
+    Ok(json!({ "rows": rows }))
 }
 
 /// DATA.PICK_ENTITIES's non-interactive form: nothing to do headlessly.

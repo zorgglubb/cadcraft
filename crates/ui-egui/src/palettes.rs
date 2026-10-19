@@ -526,7 +526,7 @@ fn value_box(ui: &mut egui::Ui, text: &str, combo: bool, enabled: bool) -> egui:
 }
 
 /// An editable numeric/text field that commits on Enter or focus loss.
-fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> {
+pub(crate) fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> {
     let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.clone());
     let w = ui.available_width() - 10.0;
     let te = id.with("te");

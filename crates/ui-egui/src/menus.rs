@@ -306,6 +306,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::tabledlg::open_assign(app);
             Ok(Value::Null)
         }
+        "data.search" if params.is_null() && app.session.state().is_ok() => {
+            crate::tabledlg::open_search(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r

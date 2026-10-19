@@ -279,6 +279,8 @@ pub struct CadApp {
     pub new_table_dlg: Option<tabledlg::NewTableState>,
     /// The Assign Table... dialog while open or picking entities ([`tabledlg`]).
     pub assign_table_dlg: Option<tabledlg::AssignTableState>,
+    /// The Search... dialog while open ([`tabledlg`]).
+    pub search_dlg: Option<tabledlg::SearchState>,
 }
 
 impl CadApp {
@@ -320,6 +322,7 @@ impl CadApp {
             carroyage_dlg: None,
             new_table_dlg: None,
             assign_table_dlg: None,
+            search_dlg: None,
         }
     }
 

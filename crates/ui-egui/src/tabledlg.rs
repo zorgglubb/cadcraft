@@ -219,6 +219,214 @@ pub fn assign_table_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut boo
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Search... (DATA.SEARCH)
+// ---------------------------------------------------------------------------------------------
+
+/// One matched row: an entity plus the fields DATA.SEARCH returned for it (already narrowed to
+/// the chosen table/field, if any).
+#[derive(Clone)]
+struct SearchRow {
+    handle: cadcraft_doc::Handle,
+    table: String,
+    fields: Vec<(String, String)>,
+}
+
+#[derive(Clone, Default)]
+pub struct SearchState {
+    query: String,
+    /// Empty means "every table".
+    table: String,
+    /// Empty means "every field"; only meaningful once a table is chosen.
+    field: String,
+    rows: Vec<SearchRow>,
+    checked: std::collections::HashSet<cadcraft_doc::Handle>,
+}
+
+pub fn open_search(app: &mut CadApp) {
+    let mut st = SearchState::default();
+    refresh_search(app, &mut st);
+    app.search_dlg = Some(st);
+    app.ui.dialog = Some("datasearch".into());
+}
+
+fn refresh_search(app: &mut CadApp, st: &mut SearchState) {
+    let params = json!({
+        "query": st.query,
+        "table": if st.table.is_empty() { Value::Null } else { Value::String(st.table.clone()) },
+        "field": if st.field.is_empty() { Value::Null } else { Value::String(st.field.clone()) },
+    });
+    st.rows = app
+        .run("data.search", params)
+        .ok()
+        .and_then(|v| v.get("rows").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| {
+            let handle = cadcraft_doc::Handle::parse_hex(r.get("handle")?.as_str()?)?;
+            let table = r.get("table")?.as_str()?.to_string();
+            let fields = r
+                .get("fields")?
+                .as_array()?
+                .iter()
+                .filter_map(|f| Some((f.get("name")?.as_str()?.to_string(), f.get("value")?.as_str().unwrap_or_default().to_string())))
+                .collect();
+            Some(SearchRow { handle, table, fields })
+        })
+        .collect();
+    st.checked.retain(|h| st.rows.iter().any(|r| r.handle == *h));
+}
+
+/// Pushes `st.checked` into the drawing's current selection, so clicking result rows selects the
+/// matching entities exactly like clicking them on screen would.
+fn sync_selection(app: &mut CadApp, st: &SearchState) {
+    let handles: Vec<String> = st.checked.iter().map(|h| h.hex()).collect();
+    let _ = app.run("select", json!({ "handles": handles }));
+}
+
+pub fn search_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let Some(mut st) = app.search_dlg.clone() else {
+        *open = false;
+        return;
+    };
+
+    let tables: Vec<String> = app
+        .run("data.list_tables", json!({}))
+        .ok()
+        .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let fields: Vec<String> = app
+        .run("data.list_tables", json!({}))
+        .ok()
+        .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .find(|t| t.get("name").and_then(Value::as_str) == Some(st.table.as_str()))
+        .and_then(|t| t.get("fields").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|f| f.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+
+    let mut changed = false;
+    let mut edits: Vec<(cadcraft_doc::Handle, String, String)> = Vec::new();
+    let mut close = false;
+    egui::Window::new(crate::tl!("Search...")).open(open).resizable(true).collapsible(false).default_size(vec2(560.0, 420.0)).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Search"));
+            changed |= ui.text_edit_singleline(&mut st.query).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Table"));
+            let table_label: String = if st.table.is_empty() { crate::i18n::t("All tables").to_string() } else { st.table.clone() };
+            egui::ComboBox::from_id_salt("cc_search_table").selected_text(table_label).show_ui(ui, |ui| {
+                if ui.selectable_label(st.table.is_empty(), crate::tl!("All tables")).clicked() && !st.table.is_empty() {
+                    st.table.clear();
+                    st.field.clear();
+                    changed = true;
+                }
+                for name in &tables {
+                    if ui.selectable_label(&st.table == name, name).clicked() && &st.table != name {
+                        st.table = name.clone();
+                        st.field.clear();
+                        changed = true;
+                    }
+                }
+            });
+            ui.add_enabled_ui(!st.table.is_empty(), |ui| {
+                ui.label(crate::tl!("Field"));
+                let field_label: String = if st.field.is_empty() { crate::i18n::t("All fields").to_string() } else { st.field.clone() };
+                egui::ComboBox::from_id_salt("cc_search_field").selected_text(field_label).show_ui(ui, |ui| {
+                    if ui.selectable_label(st.field.is_empty(), crate::tl!("All fields")).clicked() && !st.field.is_empty() {
+                        st.field.clear();
+                        changed = true;
+                    }
+                    for name in &fields {
+                        if ui.selectable_label(&st.field == name, name).clicked() && &st.field != name {
+                            st.field = name.clone();
+                            changed = true;
+                        }
+                    }
+                });
+            });
+        });
+        ui.separator();
+        egui::ScrollArea::both().max_height(280.0).show(ui, |ui| {
+            egui::Grid::new("cc_search_grid").striped(true).num_columns(3 + fields.len().max(1)).show(ui, |ui| {
+                ui.label(crate::tl!("Select"));
+                ui.label(crate::tl!("Table"));
+                if st.table.is_empty() || fields.is_empty() {
+                    ui.label(crate::tl!("Field"));
+                    ui.label(crate::tl!("Value"));
+                } else {
+                    for name in &fields {
+                        ui.label(name);
+                    }
+                }
+                ui.end_row();
+                for row in st.rows.clone() {
+                    let mut checked = st.checked.contains(&row.handle);
+                    if ui.checkbox(&mut checked, "").changed() {
+                        if checked {
+                            st.checked.insert(row.handle);
+                        } else {
+                            st.checked.remove(&row.handle);
+                        }
+                        changed = true;
+                    }
+                    ui.label(&row.table);
+                    if st.table.is_empty() || fields.is_empty() {
+                        for (k, v) in &row.fields {
+                            ui.label(k);
+                            let id = ui.id().with(("cc_search_val", row.handle, k.as_str()));
+                            if let Some(nv) = crate::palettes::edit_field(ui, id, v.clone()) {
+                                edits.push((row.handle, k.clone(), nv));
+                            }
+                        }
+                    } else {
+                        for name in &fields {
+                            let v = row.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default();
+                            let id = ui.id().with(("cc_search_val", row.handle, name.as_str()));
+                            if let Some(nv) = crate::palettes::edit_field(ui, id, v) {
+                                edits.push((row.handle, name.clone(), nv));
+                            }
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(crate::tf!("{n} row(s)", n = st.rows.len()));
+            close = ui.button(crate::tl!("Close")).clicked();
+        });
+    });
+    if close {
+        *open = false;
+    }
+
+    for (handle, key, value) in edits {
+        let r = app.run("data.set_attribute", json!({ "handle": handle.hex(), "key": key, "value": value }));
+        if let Err(e) = r {
+            app.session.echo(e);
+        }
+        changed = true;
+    }
+    if changed {
+        refresh_search(app, &mut st);
+        sync_selection(app, &st);
+    }
+    if *open {
+        app.search_dlg = Some(st);
+    } else {
+        app.search_dlg = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cadcraft_engine::{Input, Session};
