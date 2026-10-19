@@ -13,6 +13,7 @@ pub mod autosave;
 pub mod bedit;
 pub mod canvas;
 pub mod carroyagedlg;
+pub mod cheminementdlg;
 pub mod chrome;
 pub mod clipboard;
 pub mod closing;
@@ -23,6 +24,7 @@ pub mod credits;
 pub mod crsdlg;
 pub mod dialogs;
 pub mod docking;
+pub mod freestationdlg;
 pub mod hatchdlg;
 pub mod importgsidlg;
 pub mod importpointsdlg;
@@ -295,6 +297,10 @@ pub struct CadApp {
     pub station_dlg: Option<stationdlg::State>,
     /// The Import GSI Carnet dialog while open ([`importgsidlg`]).
     pub import_gsi_dlg: Option<importgsidlg::State>,
+    /// The Free Station dialog while open ([`freestationdlg`]).
+    pub free_station_dlg: Option<freestationdlg::State>,
+    /// The Traverse (Cheminement) dialog while open ([`cheminementdlg`]).
+    pub cheminement_dlg: Option<cheminementdlg::State>,
 }
 
 impl CadApp {
@@ -341,6 +347,8 @@ impl CadApp {
             import_points_dlg: None,
             station_dlg: None,
             import_gsi_dlg: None,
+            free_station_dlg: None,
+            cheminement_dlg: None,
         }
     }
 

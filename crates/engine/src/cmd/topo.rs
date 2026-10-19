@@ -21,7 +21,9 @@
 use cadcraft_color::Color;
 use cadcraft_doc::{EntityKind, HAlign, Handle, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
-use cadcraft_topo_calc::{RadiationObservation, ReferenceObservation, radiation, zero_value};
+use cadcraft_topo_calc::{
+    FreeStationObservation, RadiationObservation, ReferenceObservation, TraverseLeg, free_station, radiation, traverse, zero_value,
+};
 use cadcraft_topo_io::{csv_points, gsi, text_encoding};
 use serde_json::{Value, json};
 
@@ -42,6 +44,26 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Topo Calculations", "Calculations", "Zero Value"])
             .alias(&["vo"])
             .params("{station: [x,y,z], references: [{point: [x,y,z], hzReading: gon}]}"),
+        CommandSpec::new("topo.free_station", "Free Station", run_free_station)
+            .menu(&["Topo Calculations", "Calculations", "Free Station"])
+            .alias(&["station_libre"])
+            .params(
+                "{references: [{point: [x,y,z], distance: number, hzReading: gon}] (>=2), approx?: [x,y,z], \
+                 insertStation?: bool (default true), code?: string, label?: bool} → \
+                 {station: [x,y,z], vo, sigma, iterations, point?}. Resections the station's X/Y from the \
+                 horizontal distances to >=2 known points (independent of orientation), then derives its VO \
+                 from their Hz readings.",
+            ),
+        CommandSpec::new("topo.cheminement", "Traverse (Cheminement)", run_cheminement)
+            .menu(&["Topo Calculations", "Calculations", "Traverse (Cheminement)"])
+            .alias(&["traverse"])
+            .params(
+                "{start: [x,y,z], legs: [{gisement: gon, distance: number, code?: string}], \
+                 closingPoint?: [x,y,z], label?: bool} → {points: [...], closingError?: [ex,ey]}. Chains \
+                 each leg from `start` and, when `closingPoint` is given, distributes the raw closing error \
+                 across every station by the compass (Bowditch) rule so the last point lands exactly on it. \
+                 Each computed station (not `start`, already in the drawing) is inserted as a point.",
+            ),
         CommandSpec::new("topo.import_gsi", "Import GSI Carnet", run_import_gsi).menu(&["Topo Calculations", "Import", "GSI Carnet"]).params(
             "{path: string, station?: [x,y,z], vo?: gon, references?: [{point: [x,y,z], hzReading: gon}], \
                  label?: bool} - station/vo (or references) are required only if the \
@@ -377,6 +399,76 @@ fn run_radiation(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     Ok(json!({ "vo": vo_gon, "sigma": sigma, "points": points }))
+}
+
+/// Resections an unknown station from >=2 known reference points (distance + Hz reading to
+/// each), independent of the instrument's own orientation - see `cadcraft_topo_calc::free_station`.
+/// The station itself is inserted as a TCPOINT by default (`insertStation: false` to only report
+/// the computed coordinates/VO without touching the drawing).
+fn run_free_station(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.free_station";
+    let arr = p.get("references").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`references` (array) is required"))?;
+    if arr.len() < 2 {
+        return Err(bad(CMD, "`references` needs at least 2 points"));
+    }
+    let obs: Vec<FreeStationObservation> = arr
+        .iter()
+        .map(|r| {
+            Ok(FreeStationObservation {
+                reference: vec3_req(CMD, r, "point")?,
+                horizontal_distance: f64_req(CMD, r, "distance")?,
+                hz_reading_gon: f64_req(CMD, r, "hzReading")?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let approx = p.get("approx").map(|_| vec3_req(CMD, p, "approx")).transpose()?;
+
+    let result = free_station(&obs, approx).map_err(|e| topo_err(CMD, e))?;
+    let label = bool_or(p, "label", true);
+    let code = str_param(p, "code").map(str::to_string);
+    let insert_station = bool_or(p, "insertStation", true);
+    let point = if insert_station { Some(insert_tcpoint(s, result.station, None, code, label, TCPOINT_BLOCK, None)?) } else { None };
+
+    Ok(json!({
+        "station": [result.station.x, result.station.y, result.station.z],
+        "vo": result.vo.vo_gon,
+        "sigma": result.vo.sigma_gon,
+        "iterations": result.iterations,
+        "point": point,
+    }))
+}
+
+/// Runs a traverse ("cheminement") from `start`, chaining each leg's gisement/distance and, when
+/// a known `closingPoint` is given, adjusting every intermediate station by the compass rule -
+/// see `cadcraft_topo_calc::traverse`. Every computed station but `start` (already a point in the
+/// drawing) is inserted as a TCPOINT, in order.
+fn run_cheminement(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.cheminement";
+    let start = vec3_req(CMD, p, "start")?;
+    let legs_arr = p.get("legs").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`legs` (array) is required"))?;
+    if legs_arr.is_empty() {
+        return Err(bad(CMD, "`legs` must not be empty"));
+    }
+    let legs: Vec<TraverseLeg> = legs_arr
+        .iter()
+        .map(|l| Ok(TraverseLeg { gisement_gon: f64_req(CMD, l, "gisement")?, distance: f64_req(CMD, l, "distance")? }))
+        .collect::<Result<_>>()?;
+    let closing_point = p.get("closingPoint").map(|_| vec3_req(CMD, p, "closingPoint")).transpose()?;
+
+    let result = traverse(start, &legs, closing_point).map_err(|e| topo_err(CMD, e))?;
+    let label = bool_or(p, "label", true);
+
+    let mut points = Vec::with_capacity(legs.len());
+    for (i, leg) in legs_arr.iter().enumerate() {
+        let coord = result.points[i + 1];
+        let code = str_param(leg, "code").map(str::to_string);
+        points.push(insert_tcpoint(s, coord, None, code, label, TCPOINT_BLOCK, None)?);
+    }
+
+    Ok(json!({
+        "points": points,
+        "closingError": result.closing_error.map(|(ex, ey)| json!([ex, ey])),
+    }))
 }
 
 /// Imports a Leica GSI-8/16 carnet from disk. Two kinds of line insert directly, no station

@@ -1368,6 +1368,19 @@
 	Points CSV/TXT...	Точки CSV/TXT...
 	Projection	Проєкція
 	Radiation	Полярна зйомка
+	Free Station	Вільна станція
+	Traverse (Cheminement)	Теодолітний хід
+	Known reference points (distance + Hz reading to each, at least 2)	Відомі опорні точки (відстань + відлік Hz для кожної, не менше 2)
+	Approximate station position (optional, helps convergence)	Приблизне положення станції (необов'язково, допомагає збіжності)
+	Insert the computed station as a point	Вставити обчислену станцію як точку
+	Station: {x}, {y}, {z} - VO {vo} gon{sigma} ({iterations} iteration(s))	Станція: {x}, {y}, {z} - VO {vo} gon{sigma} ({iterations} ітерацій)
+	Inserted the free station	Вільну станцію вставлено
+	Start point	Початкова точка
+	Legs (gisement + distance from the previous station, in order)	Ділянки (азимут + відстань від попередньої станції, по порядку)
+	Gisement (gon)	Азимут (gon)
+	Add leg	Додати ділянку
+	Close onto a known point (adjust by the compass rule)	Замкнути на відому точку (зрівняння за правилом компаса)
+	Raw closing error: {ex}, {ey} (distributed across the traverse)	Нев'язка ходу: {ex}, {ey} (розподілена по ходу)
 	Refresh	Оновити
 	Refresh Elevation Labels	Оновити підписи висот
 	Split Parcel	Розділити ділянку

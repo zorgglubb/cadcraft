@@ -485,8 +485,12 @@ fn carroyage_line(d: &mut Drawing, space: &Space, common: &Common, a: Vec2, b: V
     Ok(())
 }
 
-/// A piece of text placed directly into paper space, centered on `at`.
-fn carroyage_text(d: &mut Drawing, space: &Space, common: &Common, at: Vec2, height: f64, value: String) -> Result<()> {
+/// A piece of text placed directly into paper space, anchored on `at` per `halign` - vertically
+/// always centered on `at` (`VAlign::Middle`), since every caller places `at` on the line the
+/// text sits on. `halign` lets a label that must stay clear of a border edge grow away from it
+/// (e.g. `HAlign::Left` for a label just inside the left edge, so it only grows rightward/inward
+/// instead of also spilling left onto the tick and frame it's meant to clear).
+fn carroyage_text(d: &mut Drawing, space: &Space, common: &Common, at: Vec2, height: f64, value: String, halign: HAlign) -> Result<()> {
     let text = Text {
         insert: at.to3(0.0),
         align_pt: Some(at.to3(0.0)),
@@ -496,7 +500,7 @@ fn carroyage_text(d: &mut Drawing, space: &Space, common: &Common, at: Vec2, hei
         width_factor: 1.0,
         oblique: 0.0,
         style: "Standard".into(),
-        halign: HAlign::Center,
+        halign,
         valign: VAlign::Middle,
     };
     d.add(space, common.clone(), EntityKind::Text(text))?;
@@ -702,8 +706,8 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
             carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.min.y), Vec2::new(px, outer.min.y + tick_len))?;
             carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len), Vec2::new(px, outer.max.y))?;
             let label = format!("{gx:.0}");
-            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.min.y + tick_len + label_gap), label_h, label.clone())?;
-            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len - label_gap), label_h, label)?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.min.y + tick_len + label_gap), label_h, label.clone(), HAlign::Center)?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len - label_gap), label_h, label, HAlign::Center)?;
         }
         gx += spacing_ground;
         n += 1;
@@ -716,8 +720,11 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
             carroyage_line(d, &space, &grid_common, Vec2::new(outer.min.x, py), Vec2::new(outer.min.x + tick_len, py))?;
             carroyage_line(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len, py), Vec2::new(outer.max.x, py))?;
             let label = format!("{gy:.0}");
-            carroyage_text(d, &space, &grid_common, Vec2::new(outer.min.x + tick_len + label_gap, py), label_h, label.clone())?;
-            carroyage_text(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len - label_gap, py), label_h, label)?;
+            // Left label grows rightward from just past its tick, right label grows leftward
+            // from just before its tick - each stays entirely inside the frame instead of a
+            // centered label straddling the tick/border (which is what looked "on the frame").
+            carroyage_text(d, &space, &grid_common, Vec2::new(outer.min.x + tick_len + label_gap, py), label_h, label.clone(), HAlign::Left)?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len - label_gap, py), label_h, label, HAlign::Right)?;
         }
         gy += spacing_ground;
         n += 1;
@@ -744,7 +751,7 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
 
     // One label naming the CRS, if the drawing has one assigned ("suivant epsg").
     if let Some(epsg) = epsg {
-        carroyage_text(d, &space, &grid_common, Vec2::new(outer.center().x, outer.max.y + text_h), text_h, format!("EPSG:{epsg}"))?;
+        carroyage_text(d, &space, &grid_common, Vec2::new(outer.center().x, outer.max.y + text_h), text_h, format!("EPSG:{epsg}"), HAlign::Center)?;
     }
 
     s.touch();

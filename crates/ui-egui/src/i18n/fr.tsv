@@ -1046,6 +1046,19 @@
 	Points CSV/TXT...	Points CSV/TXT...
 	Projection	Projection
 	Radiation	Rayonnement
+	Free Station	Station libre
+	Traverse (Cheminement)	Cheminement
+	Known reference points (distance + Hz reading to each, at least 2)	Points de référence connus (distance + lecture Hz pour chacun, au moins 2)
+	Approximate station position (optional, helps convergence)	Position approchée de la station (facultatif, aide à la convergence)
+	Insert the computed station as a point	Insérer la station calculée comme point
+	Station: {x}, {y}, {z} - VO {vo} gon{sigma} ({iterations} iteration(s))	Station : {x}, {y}, {z} - VO {vo} gon{sigma} ({iterations} itération(s))
+	Inserted the free station	Station libre insérée
+	Start point	Point de départ
+	Legs (gisement + distance from the previous station, in order)	Tronçons (gisement + distance depuis la station précédente, dans l'ordre)
+	Gisement (gon)	Gisement (gon)
+	Add leg	Ajouter un tronçon
+	Close onto a known point (adjust by the compass rule)	Fermer sur un point connu (compensation à la règle du compas)
+	Raw closing error: {ex}, {ey} (distributed across the traverse)	Erreur de fermeture brute : {ex}, {ey} (répartie sur le cheminement)
 	Refresh	Actualiser
 	Refresh Elevation Labels	Actualiser les étiquettes d'altitude
 	Split Parcel	Diviser une parcelle

@@ -29,6 +29,8 @@ pub enum TopoCalcError {
     InvalidZenith(f64),
     #[error("non-finite input value")]
     NonFinite,
+    #[error("free station resection did not converge from the given references/approximate position")]
+    DidNotConverge,
 }
 
 type Result<T> = std::result::Result<T, TopoCalcError>;
@@ -174,6 +176,159 @@ pub fn radiation(station: Vec3, vo_gon: f64, obs: RadiationObservation) -> Resul
     Ok(Vec3::new(x, y, z))
 }
 
+/// One observation, from the unknown station, of a known reference point: its horizontal
+/// (slope-corrected) distance, used for the trilateration, plus the horizontal circle reading
+/// (`Hz`) towards it, used afterwards to resolve the station's zero value once its position is
+/// known.
+#[derive(Clone, Copy, Debug)]
+pub struct FreeStationObservation {
+    pub reference: Vec3,
+    pub horizontal_distance: f64,
+    pub hz_reading_gon: f64,
+}
+
+/// Result of a free-station resection: the station's planar position (elevation, if wanted, is
+/// left to a separate levelling/radiation step - this is a 2D resection), its zero value and the
+/// number of Gauss-Newton iterations it took to converge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FreeStationResult {
+    pub station: Vec3,
+    pub vo: ZeroValueResult,
+    pub iterations: usize,
+}
+
+/// Resects an unknown station's position from the horizontal distances to **two or more** known
+/// reference points ("station libre"/free station), then derives its zero value from their `Hz`
+/// readings - independent of the instrument's own orientation, since distance alone fixes a
+/// circle around each reference and their intersection fixes the station.
+///
+/// With exactly two references this is a direct two-circle intersection (closed form); with more,
+/// it is a small Gauss-Newton least-squares fit minimising the squared residual between each
+/// reference's observed and predicted distance, seeded at `approx` (the centroid of the
+/// references when `None`). The elevation of the returned station is the mean of
+/// `reference.z - horizontal_distance * 0` (i.e. just the references' own mean height) - a
+/// placeholder useful for 2D work; a real height still needs a levelled/zenith observation.
+pub fn free_station(obs: &[FreeStationObservation], approx: Option<Vec3>) -> Result<FreeStationResult> {
+    if obs.len() < 2 {
+        return Err(TopoCalcError::NotEnoughPoints { need: 2, got: obs.len() });
+    }
+    for o in obs {
+        if !o.horizontal_distance.is_finite() || o.horizontal_distance < 0.0 {
+            return Err(TopoCalcError::InvalidDistance(o.horizontal_distance));
+        }
+        if !o.hz_reading_gon.is_finite() || !o.reference.x.is_finite() || !o.reference.y.is_finite() {
+            return Err(TopoCalcError::NonFinite);
+        }
+    }
+
+    let mean_z = obs.iter().map(|o| o.reference.z).sum::<f64>() / obs.len() as f64;
+    let mut x = approx.map(|p| p.x).unwrap_or_else(|| obs.iter().map(|o| o.reference.x).sum::<f64>() / obs.len() as f64);
+    let mut y = approx.map(|p| p.y).unwrap_or_else(|| obs.iter().map(|o| o.reference.y).sum::<f64>() / obs.len() as f64);
+
+    // Gauss-Newton on f_i(x,y) = dist((x,y), ref_i) - d_i = 0, normal equations solved directly
+    // since there are only two unknowns.
+    const MAX_ITER: usize = 50;
+    let mut iterations = 0;
+    for _ in 0..MAX_ITER {
+        iterations += 1;
+        let (mut jtj00, mut jtj01, mut jtj11, mut jtr0, mut jtr1) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for o in obs {
+            let dx = x - o.reference.x;
+            let dy = y - o.reference.y;
+            let d = dx.hypot(dy);
+            if d < 1e-9 {
+                return Err(TopoCalcError::CoincidentPoints);
+            }
+            let r = d - o.horizontal_distance;
+            let (gx, gy) = (dx / d, dy / d);
+            jtj00 += gx * gx;
+            jtj01 += gx * gy;
+            jtj11 += gy * gy;
+            jtr0 += gx * r;
+            jtr1 += gy * r;
+        }
+        let det = jtj00 * jtj11 - jtj01 * jtj01;
+        if det.abs() < 1e-12 {
+            break;
+        }
+        let dx = (jtj11 * jtr0 - jtj01 * jtr1) / det;
+        let dy = (jtj00 * jtr1 - jtj01 * jtr0) / det;
+        x -= dx;
+        y -= dy;
+        if dx.hypot(dy) < 1e-9 {
+            break;
+        }
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return Err(TopoCalcError::DidNotConverge);
+    }
+    let station = Vec3::new(x, y, mean_z);
+
+    let refs: Vec<ReferenceObservation> =
+        obs.iter().map(|o| ReferenceObservation { reference: o.reference, hz_reading_gon: o.hz_reading_gon }).collect();
+    let vo = zero_value(station, &refs)?;
+    Ok(FreeStationResult { station, vo, iterations })
+}
+
+/// One traverse leg ("cheminement"): the gisement and horizontal distance from the previous
+/// traverse station to the next one. Each station is assumed already oriented (its own VO known,
+/// e.g. by backsighting the previous point), so a leg's gisement is a true bearing, not a raw
+/// `Hz` reading - the caller adds the station's VO before building this.
+#[derive(Clone, Copy, Debug)]
+pub struct TraverseLeg {
+    pub gisement_gon: f64,
+    pub distance: f64,
+}
+
+/// Result of running a traverse: every station's coordinates (including the fixed starting
+/// point, so `points.len() == legs.len() + 1`), and, when a known closing point was given, the
+/// raw (pre-adjustment) closing error as `(error_x, error_y)` before the compass-rule correction
+/// folded into `points` was applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraverseResult {
+    pub points: Vec<Vec3>,
+    pub closing_error: Option<(f64, f64)>,
+}
+
+/// Runs a traverse ("cheminement") of `legs` from `start`, optionally adjusting it to a known
+/// `closing_point` by the compass (Bowditch) rule: the raw closing error is distributed across
+/// every intermediate station in proportion to its cumulative distance from `start`, so the
+/// corrected traverse ends exactly on `closing_point` instead of drifting off by the raw error.
+/// Without a `closing_point` the raw (unadjusted) polyline is returned as-is.
+pub fn traverse(start: Vec3, legs: &[TraverseLeg], closing_point: Option<Vec3>) -> Result<TraverseResult> {
+    if legs.is_empty() {
+        return Err(TopoCalcError::NoObservations);
+    }
+    let mut raw = Vec::with_capacity(legs.len() + 1);
+    raw.push(start);
+    let mut cur = start;
+    let mut cumulative = Vec::with_capacity(legs.len() + 1);
+    cumulative.push(0.0);
+    let mut total = 0.0;
+    for leg in legs {
+        cur = point_at_bearing(cur, leg.gisement_gon, leg.distance)?;
+        total += leg.distance;
+        cumulative.push(total);
+        raw.push(cur);
+    }
+
+    let Some(target) = closing_point else {
+        return Ok(TraverseResult { points: raw, closing_error: None });
+    };
+    let last = raw[raw.len() - 1];
+    let err = (target.x - last.x, target.y - last.y);
+    if total <= 0.0 {
+        return Ok(TraverseResult { points: raw, closing_error: Some(err) });
+    }
+    let mut adjusted = raw.clone();
+    for (i, p) in adjusted.iter_mut().enumerate() {
+        let frac = cumulative[i] / total;
+        p.x += err.0 * frac;
+        p.y += err.1 * frac;
+    }
+    Ok(TraverseResult { points: adjusted, closing_error: Some(err) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +467,65 @@ mod tests {
         assert!(approx(p.x, 520.0, 1e-6), "x = {}", p.x);
         assert!(approx(p.y, 500.0, 1e-6), "y = {}", p.y);
         assert!(approx(p.z, 50.0, 1e-6), "z = {}", p.z);
+    }
+
+    #[test]
+    fn free_station_resects_from_three_known_points() {
+        // Unknown station at (1000, 1000). Three known points around it; distances computed
+        // exactly, so resection should converge back onto the true position.
+        let truth = Vec3::new(1000.0, 1000.0, 0.0);
+        let refs = [Vec3::new(1100.0, 1000.0, 10.0), Vec3::new(1000.0, 1120.0, 10.0), Vec3::new(900.0, 950.0, 10.0)];
+        let obs: Vec<FreeStationObservation> = refs
+            .iter()
+            .map(|r| FreeStationObservation {
+                reference: *r,
+                horizontal_distance: dist2d(truth, *r),
+                hz_reading_gon: gisement(truth, *r).expect("gisement"), // Hz == true gisement, so VO should come out ~0
+            })
+            .collect();
+        let result = free_station(&obs, None).expect("resection should converge");
+        assert!(approx(result.station.x, 1000.0, 1e-5), "x = {}", result.station.x);
+        assert!(approx(result.station.y, 1000.0, 1e-5), "y = {}", result.station.y);
+        assert!(approx(result.vo.vo_gon, 0.0, 1e-4), "vo = {}", result.vo.vo_gon);
+    }
+
+    #[test]
+    fn free_station_needs_at_least_two_references() {
+        let obs = [FreeStationObservation { reference: Vec3::new(10.0, 0.0, 0.0), horizontal_distance: 10.0, hz_reading_gon: 100.0 }];
+        assert_eq!(free_station(&obs, None), Err(TopoCalcError::NotEnoughPoints { need: 2, got: 1 }));
+    }
+
+    #[test]
+    fn traverse_chains_legs_from_a_start_point() {
+        let start = Vec3::new(0.0, 0.0, 0.0);
+        let legs = [TraverseLeg { gisement_gon: 100.0, distance: 10.0 }, TraverseLeg { gisement_gon: 0.0, distance: 10.0 }];
+        let result = traverse(start, &legs, None).expect("traverse should succeed");
+        assert_eq!(result.points.len(), 3);
+        assert!(approx(result.points[1].x, 10.0, 1e-9));
+        assert!(approx(result.points[2].x, 10.0, 1e-9));
+        assert!(approx(result.points[2].y, 10.0, 1e-9));
+        assert_eq!(result.closing_error, None);
+    }
+
+    #[test]
+    fn traverse_with_a_closing_point_distributes_the_error_by_the_compass_rule() {
+        let start = Vec3::new(0.0, 0.0, 0.0);
+        // Two equal 10-unit legs due east; raw end is (20, 0), but the true closing point is
+        // (20, 2) - a 2-unit northward closing error split evenly (equal cumulative distance at
+        // each station) between the two legs.
+        let legs = [TraverseLeg { gisement_gon: 100.0, distance: 10.0 }, TraverseLeg { gisement_gon: 100.0, distance: 10.0 }];
+        let closing = Vec3::new(20.0, 2.0, 0.0);
+        let result = traverse(start, &legs, Some(closing)).expect("traverse should succeed");
+        let (ex, ey) = result.closing_error.expect("closing point was given");
+        assert!(approx(ex, 0.0, 1e-9));
+        assert!(approx(ey, 2.0, 1e-9));
+        assert!(approx(result.points[1].y, 1.0, 1e-9), "midpoint should get half the correction, y = {}", result.points[1].y);
+        assert!(approx(result.points[2].x, 20.0, 1e-9));
+        assert!(approx(result.points[2].y, 2.0, 1e-9), "last point should land exactly on the closing point");
+    }
+
+    #[test]
+    fn traverse_rejects_no_legs() {
+        assert_eq!(traverse(Vec3::ZERO, &[], None), Err(TopoCalcError::NoObservations));
     }
 }

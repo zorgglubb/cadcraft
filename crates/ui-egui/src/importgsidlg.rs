@@ -240,15 +240,20 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.label("Z");
                     ui.end_row();
                     for (i, r) in st.rows.iter().enumerate() {
-                        let resp = ui.label(role_label(r.role));
-                        ui.label(&r.id);
-                        ui.label(r.code.as_deref().unwrap_or(""));
-                        ui.label(fmt(r.hz));
-                        ui.label(fmt(r.vz));
-                        ui.label(fmt(r.dist));
-                        ui.label(fmt(r.x));
-                        ui.label(fmt(r.y));
-                        ui.label(fmt(r.z));
+                        // Union every cell's response into one: an untagged row's icon cell is
+                        // an empty string (`role_label(Role::Measure)` is ""), so attaching the
+                        // context menu to that first cell alone left almost no clickable area -
+                        // right-clicking anywhere else on the row (the ID, a coordinate...) did
+                        // nothing. Merging the responses makes the whole row right-clickable.
+                        let mut resp = ui.label(role_label(r.role));
+                        resp |= ui.label(&r.id);
+                        resp |= ui.label(r.code.as_deref().unwrap_or(""));
+                        resp |= ui.label(fmt(r.hz));
+                        resp |= ui.label(fmt(r.vz));
+                        resp |= ui.label(fmt(r.dist));
+                        resp |= ui.label(fmt(r.x));
+                        resp |= ui.label(fmt(r.y));
+                        resp |= ui.label(fmt(r.z));
                         ui.end_row();
                         resp.context_menu(|ui| {
                             if ui.button(crate::tl!("Use as station")).clicked() {
