@@ -1123,7 +1123,7 @@
 	Data	Données
 	Attribute Table...	Table d'attributs...
 	Assign Table...	Attribuer la table...
-	Remove Table	Enlever la table
+	Remove Table...	Enlever la table...
 	List Attribute Tables	Liste des tables d'attributs
 	Set Table Attribute	Définir un attribut de table
 	Pick Entities	Sélectionner des entités
@@ -1145,3 +1145,4 @@
 	All tables	Toutes les tables
 	All fields	Tous les champs
 	{n} row(s)	{n} ligne(s)
+	Table removed from {n} entity(ies)	Table enlevée de {n} entité(s)

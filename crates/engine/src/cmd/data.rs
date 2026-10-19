@@ -11,8 +11,16 @@
 //!
 //! DATA.SET_ATTRIBUTE is the Properties palette's own way in (no menu entry), mirroring
 //! `plan.set_shp_attribute` but checking the new value against the field's declared type first.
-//! DATA.PICK_ENTITIES is the Assign Table dialog's "Select entities" button (no menu entry
-//! either): it never touches the drawing, only leaves handles in [`Session::table_pick`].
+//! DATA.PICK_ENTITIES is the Assign Table/Remove Table dialogs' "Select entities" button (no
+//! menu entry either): it never touches the drawing, only leaves handles in
+//! [`Session::table_pick`].
+//!
+//! DATA.SEARCH and DATA.REMOVE_TABLE both look past this module's own tables, too: an entity a
+//! Shapefile import tagged (`cadcraft_doc::import_attrs::SHP_APPID`, `plan.import_shp`) carries
+//! the exact same shape of data (a table name plus field/value pairs), just with no declared
+//! schema - [`entity_table`] reads whichever of the two tagged it, and [`shp_table_defs`]
+//! synthesizes a schema for the Shapefile ones (every field `character`) so they can appear
+//! alongside the user-defined ones wherever a table needs listing.
 
 use cadcraft_doc::{AttributeField, AttributeFieldKind, AttributeTableDef, Handle};
 use serde_json::{Value, json};
@@ -31,17 +39,25 @@ pub fn specs() -> Vec<CommandSpec> {
                  `data.assign_table` attaches it).",
         ),
         CommandSpec::new("data.list_tables", "List Attribute Tables", run_list_tables)
-            .params("{} → {tables: [{name, fields: [{name, kind}]}]}")
+            .params(
+                "{includeShp?: bool (default false)} → {tables: [{name, fields: [{name, kind}]}]}. With \
+                 `includeShp`, also lists one synthetic table per distinct Shapefile import still present \
+                 in the drawing (`plan.import_shp`), its fields all `character`.",
+            )
             .noundo(),
         CommandSpec::new("data.assign_table", "Assign Table...", run_assign_table).menu(&["Data", "Assign Table..."]).params(
             "{name: string (an existing attribute table), handles?: [string] (default: current \
              selection)} → {table, assigned}. Replaces any table already on the targeted entities, \
              with every field starting empty.",
         ),
-        CommandSpec::new("data.remove_table", "Remove Table", run_remove_table)
-            .menu(&["Data", "Remove Table"])
-            .params("{handles?: [string] (default: current selection)} → {removed}")
-            .interactive(|_| Ok(Box::new(super::machines::SelectRun::new("data.remove_table", "DATAREMOVETABLE")))),
+        // No menu entry: the Remove Table... dialog opens on DATA.REMOVE_TABLE with null params
+        // (see cmd::menus' interception), asks which table to remove first (listing Shapefile
+        // imports too), then runs this with that `name` once entities are picked. A JSON call
+        // with `name`/`handles` already given (script, control channel, MCP) just runs it.
+        CommandSpec::new("data.remove_table", "Remove Table...", run_remove_table).menu(&["Data", "Remove Table..."]).params(
+            "{name?: string (only remove entities currently carrying this table; default: any table), \
+             handles?: [string] (default: current selection)} → {removed}",
+        ),
         CommandSpec::new("data.set_attribute", "Set Table Attribute", run_set_attribute).params(
             "{handle: string, key: string, value: string} → {} (Properties palette only; errs if `value` doesn't match the field's declared type)",
         ),
@@ -116,9 +132,58 @@ fn run_new_table(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-fn run_list_tables(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_list_tables(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
-    Ok(json!({ "tables": d.attribute_tables.iter().map(table_json).collect::<Vec<_>>() }))
+    let mut tables: Vec<Value> = d.attribute_tables.iter().map(table_json).collect();
+    if bool_or(p, "includeShp", false) {
+        for def in shp_table_defs(d) {
+            if !tables.iter().any(|t| t["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&def.name))) {
+                tables.push(table_json(&def));
+            }
+        }
+    }
+    Ok(json!({ "tables": tables }))
+}
+
+/// Caps how many entities `shp_table_defs`/`run_search` ever scan, so a huge drawing can't make
+/// either one unbounded.
+const MAX_ENTITIES_SCANNED: usize = 200_000;
+
+/// The table (and its field values) an entity carries, whichever mechanism tagged it: a
+/// user-defined attribute table ([`ATTR_TABLE_APPID`]) or a Shapefile import
+/// (`cadcraft_doc::import_attrs::SHP_APPID`, from `plan.import_shp`).
+fn entity_table(e: &cadcraft_doc::Entity) -> Option<(String, Vec<(String, String)>)> {
+    cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID).or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID))
+}
+
+/// One synthetic [`AttributeTableDef`] per distinct Shapefile import still present in the
+/// drawing (field names taken from the first tagged entity found for that table; every field is
+/// reported as `character` since the Shapefile mechanism keeps no field types of its own).
+fn shp_table_defs(d: &cadcraft_doc::Drawing) -> Vec<AttributeTableDef> {
+    use std::collections::BTreeMap;
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
+    let mut scanned = 0usize;
+    'entities: for store in stores {
+        for e in store.iter() {
+            scanned += 1;
+            if scanned > MAX_ENTITIES_SCANNED {
+                break 'entities;
+            }
+            if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID)
+                && !found.contains_key(&table)
+            {
+                found.insert(table, fields.into_iter().map(|(k, _)| k).collect());
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(name, field_names)| AttributeTableDef {
+            name,
+            fields: field_names.into_iter().map(|name| AttributeField { name, kind: AttributeFieldKind::Character }).collect(),
+        })
+        .collect()
 }
 
 fn run_assign_table(s: &mut Session, p: &Value) -> Result<Value> {
@@ -146,13 +211,21 @@ fn run_assign_table(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_remove_table(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "data.remove_table";
+    let name_filter = str_param(p, "name").map(str::to_string);
     let hs = targets(s, p)?;
     if hs.is_empty() {
         return Err(bad(CMD, "nothing selected"));
     }
     let has_table: Vec<Handle> = {
         let d = s.doc()?;
-        hs.iter().copied().filter(|h| d.entity(*h).is_some_and(|e| cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID).is_some())).collect()
+        hs.iter()
+            .copied()
+            .filter(|h| {
+                d.entity(*h)
+                    .and_then(|e| entity_table(e))
+                    .is_some_and(|(table, _)| name_filter.as_ref().is_none_or(|n| n.eq_ignore_ascii_case(&table)))
+            })
+            .collect()
     };
     let d = s.doc_mut()?;
     let mut removed = 0usize;
@@ -173,9 +246,19 @@ fn run_set_attribute(s: &mut Session, p: &Value) -> Result<Value> {
 
     let d = s.doc()?;
     let e = d.entity(handle).ok_or_else(|| bad(CMD, "no such entity"))?;
-    let (table, mut field_values) =
-        cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID).ok_or_else(|| bad(CMD, "entity has no attribute table"))?;
-    if let Some(def) = d.attribute_table(&table)
+    // Whichever mechanism tagged this entity is the one it gets written back under - a
+    // user-defined attribute table (type-checked against its declared field kind) or a
+    // Shapefile import (no declared kind to check against, same as `plan.set_shp_attribute`).
+    let appid = if cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID).is_some() {
+        ATTR_TABLE_APPID
+    } else if cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID).is_some() {
+        cadcraft_doc::import_attrs::SHP_APPID
+    } else {
+        return Err(bad(CMD, "entity has no attribute table"));
+    };
+    let (table, mut field_values) = cadcraft_doc::import_attrs::fields(e, appid).ok_or_else(|| bad(CMD, "entity has no attribute table"))?;
+    if appid == ATTR_TABLE_APPID
+        && let Some(def) = d.attribute_table(&table)
         && let Some(f) = def.fields.iter().find(|f| f.name == key)
         && !f.kind.validate(&value)
     {
@@ -185,7 +268,7 @@ fn run_set_attribute(s: &mut Session, p: &Value) -> Result<Value> {
         Some((_, v)) => *v = value,
         None => field_values.push((key, value)),
     }
-    let xdata = cadcraft_doc::import_attrs::tag_fields(ATTR_TABLE_APPID, &table, &field_values);
+    let xdata = cadcraft_doc::import_attrs::tag_fields(appid, &table, &field_values);
 
     s.doc_mut()?.modify_entity(handle, move |e| e.common.xdata = xdata).map_err(|e| bad(CMD, e.to_string()))?;
     s.touch();
@@ -206,7 +289,7 @@ fn run_search(s: &mut Session, p: &Value) -> Result<Value> {
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
     'entities: for store in stores {
         for e in store.iter() {
-            let Some((table, field_values)) = cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID) else { continue };
+            let Some((table, field_values)) = entity_table(e) else { continue };
             if table_filter.as_ref().is_some_and(|t| !t.eq_ignore_ascii_case(&table)) {
                 continue;
             }

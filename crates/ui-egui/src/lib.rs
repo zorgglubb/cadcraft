@@ -281,6 +281,8 @@ pub struct CadApp {
     pub assign_table_dlg: Option<tabledlg::AssignTableState>,
     /// The Search... dialog while open ([`tabledlg`]).
     pub search_dlg: Option<tabledlg::SearchState>,
+    /// The Remove Table... dialog while open or picking entities ([`tabledlg`]).
+    pub remove_table_dlg: Option<tabledlg::RemoveTableState>,
 }
 
 impl CadApp {
@@ -323,6 +325,7 @@ impl CadApp {
             new_table_dlg: None,
             assign_table_dlg: None,
             search_dlg: None,
+            remove_table_dlg: None,
         }
     }
 
@@ -616,6 +619,7 @@ impl CadApp {
         hatchdlg::resume(self);
         carroyagedlg::resume(self);
         tabledlg::resume_assign(self);
+        tabledlg::resume_remove(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

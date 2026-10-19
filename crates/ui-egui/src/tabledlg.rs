@@ -220,6 +220,121 @@ pub fn assign_table_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut boo
 }
 
 // ---------------------------------------------------------------------------------------------
+// Remove Table... (DATA.REMOVE_TABLE)
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+pub struct RemoveTableState {
+    selected: Option<String>,
+    handles: Vec<cadcraft_doc::Handle>,
+    picking: bool,
+}
+
+pub fn open_remove(app: &mut CadApp) {
+    app.remove_table_dlg = Some(RemoveTableState::default());
+    app.ui.dialog = Some("removetable".into());
+}
+
+fn start_pick_remove(app: &mut CadApp) {
+    let Some(st) = app.remove_table_dlg.as_mut() else { return };
+    st.picking = true;
+    app.session.table_pick = None;
+    app.ui.dialog = None;
+    app.start("data.pick_entities");
+}
+
+/// Every frame: once a DATA.PICK_ENTITIES the Remove Table dialog started has ended, take its
+/// handles and bring the dialog back (unchanged when the pick was cancelled).
+pub fn resume_remove(app: &mut CadApp) {
+    if !app.remove_table_dlg.as_ref().is_some_and(|s| s.picking) {
+        return;
+    }
+    if app.session.running.is_some() {
+        return;
+    }
+    let picked = app.session.table_pick.take();
+    let Some(st) = app.remove_table_dlg.as_mut() else { return };
+    st.picking = false;
+    if let Some(hs) = picked {
+        st.handles = hs;
+    }
+    app.ui.dialog = Some("removetable".into());
+}
+
+pub fn remove_table_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let Some(mut st) = app.remove_table_dlg.clone() else {
+        *open = false;
+        return;
+    };
+
+    // Lists both user-defined attribute tables and Shapefile imports still present in the
+    // drawing (same `includeShp` convention as the Search... dialog).
+    let tables: Vec<String> = app
+        .run("data.list_tables", json!({ "includeShp": true }))
+        .ok()
+        .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+
+    let (mut select, mut remove, mut close) = (false, false, false);
+    egui::Window::new(crate::tl!("Remove Table...")).open(open).resizable(true).collapsible(false).default_size(vec2(320.0, 360.0)).show(ctx, |ui| {
+        ui.label(crate::tl!("Table"));
+        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+            if tables.is_empty() {
+                ui.label(crate::tl!("No attribute table yet."));
+            }
+            for name in &tables {
+                if ui.selectable_label(st.selected.as_deref() == Some(name.as_str()), name).clicked() {
+                    st.selected = Some(name.clone());
+                }
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            select = ui.button(crate::tl!("Select entities")).clicked();
+            let count_label: String = if st.handles.is_empty() {
+                crate::tl!("No entity selected yet.").to_string()
+            } else {
+                crate::tf!("{n} entity(ies) selected", n = st.handles.len())
+            };
+            ui.label(count_label);
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            remove = ui.add_enabled(st.selected.is_some() && !st.handles.is_empty(), egui::Button::new(crate::tl!("Remove"))).clicked();
+            close = ui.button(crate::tl!("Close")).clicked();
+        });
+    });
+    if close {
+        *open = false;
+    }
+
+    if select {
+        app.remove_table_dlg = Some(st.clone());
+        start_pick_remove(app);
+        return;
+    }
+    if remove && let Some(name) = st.selected.clone() {
+        let handles: Vec<String> = st.handles.iter().map(|h| h.hex()).collect();
+        let r = app.run("data.remove_table", json!({ "name": name, "handles": handles }));
+        app.session.echo(match &r {
+            Ok(v) => crate::tf!("Table removed from {n} entity(ies)", n = v.get("removed").and_then(Value::as_u64).unwrap_or(0)),
+            Err(e) => e.clone(),
+        });
+        if r.is_ok() {
+            *open = false;
+        }
+    }
+    if *open {
+        app.remove_table_dlg = Some(st);
+    } else {
+        app.remove_table_dlg = None;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Search... (DATA.SEARCH)
 // ---------------------------------------------------------------------------------------------
 
@@ -290,19 +405,16 @@ pub fn search_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         return;
     };
 
-    let tables: Vec<String> = app
-        .run("data.list_tables", json!({}))
+    // `includeShp`: a Shapefile import (`plan.import_shp`) tags its entities with a table/field
+    // shape just like `data.new_table`'s does, just with no declared schema - the engine side
+    // synthesizes one (every field `character`) so those show up here too.
+    let all_tables: Vec<Value> = app
+        .run("data.list_tables", json!({ "includeShp": true }))
         .ok()
         .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    let fields: Vec<String> = app
-        .run("data.list_tables", json!({}))
-        .ok()
-        .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let tables: Vec<String> = all_tables.iter().filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string)).collect();
+    let fields: Vec<String> = all_tables
         .iter()
         .find(|t| t.get("name").and_then(Value::as_str) == Some(st.table.as_str()))
         .and_then(|t| t.get("fields").and_then(Value::as_array).cloned())

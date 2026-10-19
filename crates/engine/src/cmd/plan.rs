@@ -42,9 +42,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("plan.import_shp", "Import Shapefile (SHP)", run_import_shp)
             .menu(&["Plan", "Import/Export", "Import Shapefile (SHP)"])
             .params(
-                "{path: string (.shp; a .dbf next to it is read for attributes), layer?: string} → {imported, skipped}. \
+                "{path: string (.shp; a .dbf next to it is read for attributes), layer?: string} → {imported, skipped, layer}. \
                  Each feature's DBF fields (and the .shp file's own name, standing in for a table name) are \
-                 kept on the entity as XDATA - visible in Properties and carried over if re-exported.",
+                 kept on the entity as XDATA - visible in Properties and carried over if re-exported. With no \
+                 `layer`, a new layer named after the .shp file is created (if it doesn't exist yet) and every \
+                 imported entity goes on it, so a drawing with several imports keeps them apart.",
             ),
         CommandSpec::new("plan.export_shp", "Export Shapefile (SHP)", run_export_shp)
             .menu(&["Plan", "Import/Export", "Export Shapefile (SHP)"])
@@ -120,17 +122,21 @@ pub fn specs() -> Vec<CommandSpec> {
 fn run_import_shp(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plan.import_shp";
     let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` (string, the .shp file) is required"))?;
-    let layer = str_param(p, "layer").unwrap_or("0").to_string();
+    // The Shapefile format has no table name of its own (one table per file), so the .shp file's
+    // own stem stands in for one - shown in Properties alongside the fields it names - and, with
+    // no explicit `layer`, doubles as the name of a new layer created to hold this import.
+    let table = std::path::Path::new(path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("shapefile").to_string();
+    let layer = str_param(p, "layer").map_or_else(|| table.clone(), str::to_string);
 
     let shp_bytes = std::fs::read(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let dbf_path = std::path::Path::new(path).with_extension("dbf");
     let dbf_bytes = std::fs::read(&dbf_path).ok();
 
     let import = shp::read(&shp_bytes, dbf_bytes.as_deref()).map_err(|e| bad(CMD, e.to_string()))?;
-    // The Shapefile format has no table name of its own (one table per file), so the .shp file's
-    // own stem stands in for one - shown in Properties alongside the fields it names.
-    let table = std::path::Path::new(path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("shapefile").to_string();
 
+    if !layer.is_empty() && layer != "0" {
+        s.doc_mut()?.ensure_layer(&layer);
+    }
     let mut imported = 0usize;
     for feature in &import.features {
         let Some(geometry) = &feature.geometry else { continue };
@@ -145,7 +151,7 @@ fn run_import_shp(s: &mut Session, p: &Value) -> Result<Value> {
         imported += 1;
     }
 
-    Ok(json!({ "imported": imported, "skipped": import.skipped_records + (import.features.len() - imported) }))
+    Ok(json!({ "imported": imported, "skipped": import.skipped_records + (import.features.len() - imported), "layer": layer }))
 }
 
 fn shp_geometry_to_entity(g: &shp::Geometry) -> Option<EntityKind> {
@@ -682,6 +688,11 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // --- Crosses, ticks and round-coordinate labels (geometry precomputed above) ---
+    // Labels sit inside the frame, just past their own tick mark (tick marks already point
+    // inward from the border), on both sides of the grid: bottom and top for the X labels,
+    // left and right for the Y ones - at half the border's own text height.
+    let label_h = text_h * 0.5;
+    let label_gap = label_h * 0.6;
     let mut gx = gx_start;
     let mut n = 0usize;
     while gx <= window.max.x && n < max_steps {
@@ -690,7 +701,9 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
             // Ticks on the top and bottom border.
             carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.min.y), Vec2::new(px, outer.min.y + tick_len))?;
             carroyage_line(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len), Vec2::new(px, outer.max.y))?;
-            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.min.y - text_h), text_h, format!("{gx:.0}"))?;
+            let label = format!("{gx:.0}");
+            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.min.y + tick_len + label_gap), label_h, label.clone())?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(px, outer.max.y - tick_len - label_gap), label_h, label)?;
         }
         gx += spacing_ground;
         n += 1;
@@ -702,7 +715,9 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
         if py >= outer.min.y && py <= outer.max.y {
             carroyage_line(d, &space, &grid_common, Vec2::new(outer.min.x, py), Vec2::new(outer.min.x + tick_len, py))?;
             carroyage_line(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len, py), Vec2::new(outer.max.x, py))?;
-            carroyage_text(d, &space, &grid_common, Vec2::new(outer.min.x - text_h * 2.0, py), text_h, format!("{gy:.0}"))?;
+            let label = format!("{gy:.0}");
+            carroyage_text(d, &space, &grid_common, Vec2::new(outer.min.x + tick_len + label_gap, py), label_h, label.clone())?;
+            carroyage_text(d, &space, &grid_common, Vec2::new(outer.max.x - tick_len - label_gap, py), label_h, label)?;
         }
         gy += spacing_ground;
         n += 1;
@@ -733,6 +748,10 @@ fn run_carroyage(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     s.touch();
+    // The grid is drawn on its own new paper-space layout, never in Model - switch the active
+    // tab there so the person sees it right away instead of staying on Model and wondering
+    // where it went.
+    s.execute("layout.set", &json!({ "name": layout_name }))?;
     Ok(json!({
         "layout": layout_name,
         "layer": layer_name,
@@ -844,6 +863,30 @@ mod tests {
         let (table, fields) = super::shp_attributes(e).expect("the entity should carry its source attributes");
         assert_eq!(table, fixture.file_stem().and_then(std::ffi::OsStr::to_str).unwrap());
         assert_eq!(fields, attrs.to_vec());
+
+        for ext in ["shp", "shx", "dbf"] {
+            let _ = std::fs::remove_file(fixture.with_extension(ext));
+        }
+    }
+
+    #[test]
+    fn import_shp_creates_a_layer_named_after_the_file_and_puts_the_entity_on_it() {
+        use cadcraft_geom::Vec3;
+        use cadcraft_io::shp;
+
+        let fixture = std::env::temp_dir().join(format!("cadcraft-plan-layer-{}.shp", std::process::id()));
+        let geom = shp::Geometry::Point(Vec3::new(0.0, 0.0, 0.0));
+        shp::write_to_files(&fixture, &[shp::OutFeature { geometry: &geom, attributes: &[] }]).expect("writing the fixture should succeed");
+
+        let mut s = session_with_doc();
+        let imp = s.execute("plan.import_shp", &json!({ "path": fixture.to_string_lossy() })).expect("import should succeed");
+        let expected_layer = fixture.file_stem().and_then(std::ffi::OsStr::to_str).unwrap().to_string();
+        assert_eq!(imp["layer"].as_str(), Some(expected_layer.as_str()));
+
+        let doc = s.doc().expect("doc");
+        assert!(doc.layer(&expected_layer).is_some(), "the layer should have been created");
+        let e = doc.space(&cadcraft_doc::Space::Model).and_then(|sp| sp.iter().next()).expect("one entity");
+        assert_eq!(e.common.layer, expected_layer);
 
         for ext in ["shp", "shx", "dbf"] {
             let _ = std::fs::remove_file(fixture.with_extension(ext));
@@ -1203,6 +1246,32 @@ mod tests {
 
         // A cross, tick or label landed on the new layer.
         assert!(layout.entities.iter().any(|e| e.common.layer == layer_name));
+        // The view switches to the new layout, so the person sees the grid right away.
+        assert_eq!(s.layout_space(), cadcraft_doc::Space::Paper(layout_name));
+    }
+
+    #[test]
+    fn carroyage_labels_sit_inside_the_frame_on_all_four_sides_at_half_height() {
+        let mut s = session_with_doc();
+        let out = s
+            .execute(
+                "plan.carroyage",
+                &json!({ "window": { "min": [0.0, 0.0], "max": [4000.0, 4000.0] }, "scale": 1000, "spacingCm": 1, "paper": "A4" }),
+            )
+            .expect("carroyage should succeed");
+        let layout_name = out["layout"].as_str().unwrap().to_string();
+        let d = s.doc().expect("doc");
+        let layout = d.layout(&layout_name).expect("the new layout should exist");
+        let texts: Vec<&super::Text> =
+            layout.entities.iter().filter_map(|e| if let super::EntityKind::Text(t) = &e.kind { Some(t) } else { None }).collect();
+        assert!(texts.len() >= 4, "expected labels on all four sides, got {}", texts.len());
+        let heights: std::collections::BTreeSet<_> = texts.iter().map(|t| (t.height * 1e6).round() as i64).collect();
+        assert_eq!(heights.len(), 1, "every coordinate label should share the same (halved) height");
+        // At least one label on each side of the border.
+        let xs: Vec<f64> = texts.iter().map(|t| t.insert.x).collect();
+        let ys: Vec<f64> = texts.iter().map(|t| t.insert.y).collect();
+        assert!(xs.iter().any(|&x| x < xs.iter().copied().sum::<f64>() / xs.len() as f64 - 1e-6), "left-side labels");
+        assert!(ys.iter().any(|&y| y < ys.iter().copied().sum::<f64>() / ys.len() as f64 - 1e-6), "bottom-side labels");
     }
 
     #[test]

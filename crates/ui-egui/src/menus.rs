@@ -310,6 +310,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::tabledlg::open_search(app);
             Ok(Value::Null)
         }
+        // DATA.REMOVE_TABLE no longer has an `.interactive()` of its own: the dialog asks which
+        // table to remove first (listing Shapefile imports too), then runs it with that `name`
+        // once entities are picked. A JSON call with `name`/`handles` already given still just
+        // runs it.
+        "data.remove_table" if params.is_null() && app.session.state().is_ok() => {
+            crate::tabledlg::open_remove(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r

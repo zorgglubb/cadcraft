@@ -1445,7 +1445,7 @@
 	Data	Дані
 	Attribute Table...	Таблиця атрибутів...
 	Assign Table...	Призначити таблицю...
-	Remove Table	Видалити таблицю
+	Remove Table...	Видалити таблицю...
 	List Attribute Tables	Список таблиць атрибутів
 	Set Table Attribute	Встановити атрибут таблиці
 	Pick Entities	Вибрати об'єкти
@@ -1467,3 +1467,4 @@
 	All tables	Усі таблиці
 	All fields	Усі поля
 	{n} row(s)	{n} рядок(ів)
+	Table removed from {n} entity(ies)	Таблицю видалено з {n} об'єкт(ів)

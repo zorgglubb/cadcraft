@@ -30,6 +30,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "newtable" => crate::tabledlg::new_table_dialog(app, ctx, &mut open),
         "assigntable" => crate::tabledlg::assign_table_dialog(app, ctx, &mut open),
         "datasearch" => crate::tabledlg::search_dialog(app, ctx, &mut open),
+        "removetable" => crate::tabledlg::remove_table_dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),
