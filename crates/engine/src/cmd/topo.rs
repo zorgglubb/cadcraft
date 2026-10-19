@@ -18,6 +18,7 @@
 //! point's MAT text and nothing else (`crates/render/src/lib.rs`'s `insert` resolves each
 //! attribute against its own definition's properties, not the reference's).
 
+use cadcraft_color::Color;
 use cadcraft_doc::{EntityKind, HAlign, Handle, Point, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
 use cadcraft_topo_calc::{RadiationObservation, ReferenceObservation, radiation, zero_value};
@@ -71,7 +72,15 @@ pub fn specs() -> Vec<CommandSpec> {
         // asked of the person - it decides whether the dialog needs to show the station/VO
         // fields at all (a coordinate-only carnet imports with neither).
         CommandSpec::new("topo.gsi_inspect", "Inspect GSI Carnet", run_gsi_inspect)
-            .params("{path: string} → {pointCount, needsStation: bool, skippedLines}")
+            .params("{path: string} → {pointCount, needsStation: bool, skippedLines, points: [{id, code, hz, vz, dist, x, y, z}]}")
+            .noundo(),
+        // No menu entry: the Import GSI dialog's "known references" file picker, matched by id
+        // against the carnet's own rows rather than inserted on its own.
+        CommandSpec::new("topo.parse_points_csv", "Parse Points CSV/TXT", run_parse_points_csv)
+            .params(
+                "{path: string, delimiter?: \"auto\"|\"comma\"|\"semicolon\"|\"colon\"|\"space\"|\"tab\" \
+                 (default \"auto\")} → {points: [{id, x, y, z, code}], skippedLines}",
+            )
             .noundo(),
     ]
 }
@@ -114,6 +123,34 @@ fn run_gsi_inspect(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "pointCount": import.points.len(),
         "needsStation": gsi_needs_station(&import),
+        "skippedLines": import.skipped_lines,
+        // Every point the carnet decoded, for the Import GSI dialog's own points list - the
+        // person tags each row Station/Reference/Measure there (right-click), rather than
+        // retyping coordinates CADCraft already read from the file.
+        "points": import.points.iter().map(|gp| json!({
+            "id": gp.id,
+            "code": gp.code,
+            "hz": gp.hz_gon,
+            "vz": gp.vz_gon,
+            "dist": gp.slope_distance,
+            "x": gp.x, "y": gp.y, "z": gp.z,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// Parses a plain ID/X/Y/Z(/code) points file without touching the drawing - the Import GSI
+/// dialog's "known references" file, matched by id against the carnet's own rows so a
+/// reference's Hz reading (only the carnet has it) pairs with coordinates from a separate,
+/// trusted control-point file rather than requiring both in one place.
+fn run_parse_points_csv(_s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "topo.parse_points_csv";
+    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
+    let text = text_encoding::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+    let import = csv_points::parse_with(&text, csv_delimiter(str_param(p, "delimiter")));
+    Ok(json!({
+        "points": import.points.iter().map(|cp| json!({
+            "id": cp.id, "x": cp.x, "y": cp.y, "z": cp.z, "code": cp.code,
+        })).collect::<Vec<_>>(),
         "skippedLines": import.skipped_lines,
     }))
 }
@@ -215,8 +252,14 @@ fn ensure_tcpoint_block(s: &mut Session, block: &str) -> Result<()> {
     if s.doc()?.blocks.keys().any(|k| k.eq_ignore_ascii_case(block)) {
         return Ok(());
     }
-    for layer in [TOPOCOD_LAYER, TOPOMAT_LAYER, TOPOALT_LAYER] {
+    // ACI 1 (red)/3 (green)/4 (cyan) - the same standard AutoCAD colour index a person would
+    // pick by eye, so COD/ALT/MAT are visually distinct the instant the layers exist, before
+    // anyone thinks to colour them by hand.
+    for (layer, aci) in [(TOPOCOD_LAYER, 1u8), (TOPOALT_LAYER, 3), (TOPOMAT_LAYER, 4)] {
         s.doc_mut()?.ensure_layer(layer);
+        if let Some(l) = s.doc_mut()?.layer_mut(layer) {
+            l.color = Color::Index(aci);
+        }
     }
     let mut handles: Vec<Value> = Vec::new();
     let mut draw = |s: &mut Session, cmd: &str, params: Value, layer: Option<&str>| -> Result<()> {

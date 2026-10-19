@@ -1,29 +1,68 @@
 //! The Import GSI Carnet dialog: TOPO.IMPORT_GSI from a menu or the command line (no parameters)
 //! picks the file first (same picker OPEN/IMPORT use), then inspects it with TOPO.GSI_INSPECT -
 //! a coordinate-only carnet (WI 81/82/83) needs nothing further and imports as soon as this
-//! opens the same way the old one-shot behaviour did; a carnet with angle+distance shots and no
+//! opens, the same way the old one-shot behaviour did; a carnet with angle+distance shots and no
 //! ready-made coordinates needs a station occupied and an orientation (a known VO, or references
-//! to compute one from) first, so this shows the same station/VO fields [`crate::stationdlg`]
-//! uses for TOPO.RADIATION/TOPO.ZERO_VALUE before enabling Import.
+//! to compute one from) first.
+//!
+//! Organised the way a field carnet actually gets worked up: every point the carnet decoded is
+//! listed, and right-clicking a row tags it Station or Reference (everything else is a plain
+//! measured point, imported as-is) - rather than retyping coordinates CADCraft already read from
+//! the file. A reference often only has its coordinates in a separate control-point list, not in
+//! the carnet itself, so "Import known references..." reads one (any delimiter, like
+//! TOPO.IMPORT_POINTS's own picker) and fills in any carnet row whose id matches.
 
 use egui::vec2;
 use serde_json::{Value, json};
 
 use crate::CadApp;
-use crate::stationdlg::ReferenceRow;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Role {
+    #[default]
+    Measure,
+    Station,
+    Reference,
+}
+
+#[derive(Clone)]
+struct GsiRow {
+    id: String,
+    code: Option<String>,
+    hz: Option<f64>,
+    vz: Option<f64>,
+    dist: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    z: Option<f64>,
+    role: Role,
+}
+
+const DELIMITERS: [(&str, &str); 6] =
+    [("auto", "Auto"), ("comma", "Comma (,)"), ("semicolon", "Semicolon (;)"), ("colon", "Colon (:)"), ("space", "Space"), ("tab", "Tab")];
 
 #[derive(Clone)]
 pub struct State {
     path: String,
     needs_station: bool,
-    point_count: u64,
+    rows: Vec<GsiRow>,
+    /// Manual station coordinates, used when the row tagged Station carries none of its own (a
+    /// pure angle+distance carnet never does) - pre-filled from that row's coordinates when it
+    /// has them, but always editable.
     station_x: String,
     station_y: String,
     station_z: String,
     from_references: bool,
     vo: String,
-    references: Vec<ReferenceRow>,
+    /// The last "Import known references..." file, kept so changing the delimiter re-merges it.
+    ref_path: Option<String>,
+    ref_delimiter: String,
+    ref_matched: usize,
     label: bool,
+}
+
+fn opt_num(v: &Value, key: &str) -> Option<f64> {
+    v.get(key).and_then(Value::as_f64)
 }
 
 impl State {
@@ -31,13 +70,15 @@ impl State {
         State {
             path,
             needs_station: false,
-            point_count: 0,
+            rows: Vec::new(),
             station_x: String::new(),
             station_y: String::new(),
             station_z: "0".into(),
             from_references: false,
             vo: "0".into(),
-            references: vec![ReferenceRow::default()],
+            ref_path: None,
+            ref_delimiter: "auto".into(),
+            ref_matched: 0,
             label: true,
         }
     }
@@ -47,7 +88,25 @@ pub fn open(app: &mut CadApp, path: String) {
     let mut st = State::new(path);
     if let Ok(v) = app.run("topo.gsi_inspect", json!({ "path": st.path })) {
         st.needs_station = v["needsStation"].as_bool().unwrap_or(false);
-        st.point_count = v["pointCount"].as_u64().unwrap_or(0);
+        st.rows = v["points"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| {
+                Some(GsiRow {
+                    id: p.get("id")?.as_str()?.to_string(),
+                    code: p.get("code").and_then(Value::as_str).map(str::to_string),
+                    hz: opt_num(p, "hz"),
+                    vz: opt_num(p, "vz"),
+                    dist: opt_num(p, "dist"),
+                    x: opt_num(p, "x"),
+                    y: opt_num(p, "y"),
+                    z: opt_num(p, "z"),
+                    role: Role::Measure,
+                })
+            })
+            .collect();
     }
     // A coordinate-only carnet has nothing left to ask for - import right away, same as before
     // this dialog existed, and report the result rather than opening an empty-looking window.
@@ -64,10 +123,19 @@ fn num(s: &str) -> Option<f64> {
     if t.is_empty() { None } else { t.parse::<f64>().ok() }
 }
 
+fn fmt(v: Option<f64>) -> String {
+    v.map(|n| format!("{n:.4}")).unwrap_or_default()
+}
+
+/// References usable to compute VO: tagged Reference, with both coordinates (from the carnet or
+/// a merged known-references file) and the carnet's own Hz reading for that shot.
+fn usable_references(st: &State) -> Vec<&GsiRow> {
+    st.rows.iter().filter(|r| r.role == Role::Reference && r.x.is_some() && r.y.is_some() && r.hz.is_some()).collect()
+}
+
 fn ready(st: &State) -> bool {
     let station = num(&st.station_x).is_some() && num(&st.station_y).is_some();
-    station
-        && if st.from_references { st.references.iter().any(|r| !r.x.trim().is_empty() && !r.hz.trim().is_empty()) } else { num(&st.vo).is_some() }
+    station && if st.from_references { !usable_references(st).is_empty() } else { num(&st.vo).is_some() }
 }
 
 fn run_import(app: &mut CadApp, st: &State) {
@@ -79,11 +147,9 @@ fn run_import(app: &mut CadApp, st: &State) {
         let Some(y) = num(&st.station_y) else { return };
         params.insert("station".into(), json!([x, y, num(&st.station_z).unwrap_or(0.0)]));
         if st.from_references {
-            let refs: Vec<Value> = st
-                .references
+            let refs: Vec<Value> = usable_references(st)
                 .iter()
-                .filter(|r| !r.x.trim().is_empty() && !r.hz.trim().is_empty())
-                .filter_map(|r| Some(json!({ "point": [num(&r.x)?, num(&r.y)?, num(&r.z).unwrap_or(0.0)], "hzReading": num(&r.hz)? })))
+                .map(|r| json!({ "point": [r.x.unwrap_or(0.0), r.y.unwrap_or(0.0), r.z.unwrap_or(0.0)], "hzReading": r.hz.unwrap_or(0.0) }))
                 .collect();
             params.insert("references".into(), Value::Array(refs));
         } else if let Some(vo) = num(&st.vo) {
@@ -101,21 +167,127 @@ fn run_import(app: &mut CadApp, st: &State) {
     }
 }
 
+/// Re-parses the known-references file at the dialog's chosen delimiter and fills in the
+/// coordinates (and tags as Reference) of every carnet row whose id matches one in it -
+/// idempotent, so it can be re-run every time the path or delimiter changes.
+fn merge_references(app: &mut CadApp, st: &mut State) {
+    st.ref_matched = 0;
+    let Some(path) = st.ref_path.clone() else { return };
+    let Ok(v) = app.run("topo.parse_points_csv", json!({ "path": path, "delimiter": st.ref_delimiter })) else { return };
+    let Some(points) = v["points"].as_array().cloned() else { return };
+    for p in &points {
+        let Some(id) = p.get("id").and_then(Value::as_str) else { continue };
+        if let Some(row) = st.rows.iter_mut().find(|r| r.id.eq_ignore_ascii_case(id)) {
+            row.x = opt_num(p, "x");
+            row.y = opt_num(p, "y");
+            row.z = opt_num(p, "z");
+            if row.hz.is_some() {
+                row.role = Role::Reference;
+            }
+            st.ref_matched += 1;
+        }
+    }
+}
+
+fn use_as_station(st: &mut State, i: usize) {
+    for r in &mut st.rows {
+        if r.role == Role::Station {
+            r.role = Role::Measure;
+        }
+    }
+    let row = &mut st.rows[i];
+    row.role = Role::Station;
+    st.station_x = row.x.map(|n| format!("{n}")).unwrap_or_default();
+    st.station_y = row.y.map(|n| format!("{n}")).unwrap_or_default();
+    st.station_z = row.z.map(|n| format!("{n}")).unwrap_or_else(|| "0".into());
+}
+
+fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::Measure => "",
+        Role::Station => "📍",
+        Role::Reference => "🎯",
+    }
+}
+
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let Some(mut st) = app.import_gsi_dlg.clone() else {
         *open = false;
         return;
     };
 
-    let (mut import, mut close) = (false, false);
-    egui::Window::new(crate::tl!("Import GSI Carnet")).open(open).resizable(true).collapsible(false).default_size(vec2(480.0, 380.0)).show(
+    let (mut import, mut close, mut pick_refs, mut delimiter_changed) = (false, false, false, false);
+    let mut row_action: Option<(usize, Role)> = None;
+    egui::Window::new(crate::tl!("Import GSI Carnet")).open(open).resizable(true).collapsible(false).default_size(vec2(640.0, 560.0)).show(
         ctx,
         |ui| {
             ui.horizontal(|ui| {
                 ui.label(crate::tl!("File"));
                 ui.label(&st.path);
             });
-            ui.label(crate::tf!("{n} point(s) read; a station is needed for its angle/distance shots", n = st.point_count));
+            ui.label(crate::tf!("{n} point(s) read; right-click a row to tag it Station or Reference", n = st.rows.len()));
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                egui::Grid::new("cc_gsi_rows").striped(true).show(ui, |ui| {
+                    ui.label("");
+                    ui.label("ID");
+                    ui.label(crate::tl!("Code"));
+                    ui.label(crate::tl!("Hz reading (gon)"));
+                    ui.label(crate::tl!("Zenith (gon)"));
+                    ui.label(crate::tl!("Slope distance"));
+                    ui.label("X");
+                    ui.label("Y");
+                    ui.label("Z");
+                    ui.end_row();
+                    for (i, r) in st.rows.iter().enumerate() {
+                        let resp = ui.label(role_label(r.role));
+                        ui.label(&r.id);
+                        ui.label(r.code.as_deref().unwrap_or(""));
+                        ui.label(fmt(r.hz));
+                        ui.label(fmt(r.vz));
+                        ui.label(fmt(r.dist));
+                        ui.label(fmt(r.x));
+                        ui.label(fmt(r.y));
+                        ui.label(fmt(r.z));
+                        ui.end_row();
+                        resp.context_menu(|ui| {
+                            if ui.button(crate::tl!("Use as station")).clicked() {
+                                row_action = Some((i, Role::Station));
+                                ui.close();
+                            }
+                            if ui.button(crate::tl!("Mark as reference")).clicked() {
+                                row_action = Some((i, Role::Reference));
+                                ui.close();
+                            }
+                            if ui.button(crate::tl!("Mark as measured point")).clicked() {
+                                row_action = Some((i, Role::Measure));
+                                ui.close();
+                            }
+                        });
+                    }
+                });
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button(crate::tl!("Import known references...")).clicked() {
+                    pick_refs = true;
+                }
+                if let Some(path) = &st.ref_path {
+                    ui.label(path);
+                    ui.label(crate::tf!("{n} matched", n = st.ref_matched));
+                }
+            });
+            if st.ref_path.is_some() {
+                ui.horizontal(|ui| {
+                    ui.label(crate::tl!("Delimiter"));
+                    for (key, label) in DELIMITERS {
+                        if ui.selectable_label(st.ref_delimiter == key, crate::i18n::t(label)).clicked() && st.ref_delimiter != key {
+                            st.ref_delimiter = key.to_string();
+                            delimiter_changed = true;
+                        }
+                    }
+                });
+            }
             ui.separator();
             ui.label(crate::tl!("Station"));
             ui.horizontal(|ui| {
@@ -135,30 +307,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 }
             });
             if st.from_references {
-                egui::Grid::new("cc_gsi_refs").striped(true).show(ui, |ui| {
-                    ui.label("X");
-                    ui.label("Y");
-                    ui.label("Z");
-                    ui.label(crate::tl!("Hz reading (gon)"));
-                    ui.end_row();
-                    let mut remove: Option<usize> = None;
-                    for (i, r) in st.references.iter_mut().enumerate() {
-                        ui.text_edit_singleline(&mut r.x);
-                        ui.text_edit_singleline(&mut r.y);
-                        ui.text_edit_singleline(&mut r.z);
-                        ui.text_edit_singleline(&mut r.hz);
-                        if ui.button("✕").clicked() {
-                            remove = Some(i);
-                        }
-                        ui.end_row();
-                    }
-                    if let Some(i) = remove {
-                        st.references.remove(i);
-                    }
-                });
-                if ui.button(crate::tl!("Add reference")).clicked() {
-                    st.references.push(ReferenceRow::default());
-                }
+                let n = usable_references(&st).len();
+                ui.label(crate::tf!("{n} tagged reference(s) with coordinates and an Hz reading", n = n));
             } else {
                 ui.horizontal(|ui| {
                     ui.label(crate::tl!("VO (gon)"));
@@ -176,6 +326,24 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if close {
         *open = false;
     }
+    if let Some((i, role)) = row_action {
+        if role == Role::Station {
+            use_as_station(&mut st, i);
+        } else {
+            st.rows[i].role = role;
+        }
+    }
+    if pick_refs {
+        let picked = app.services.pick_open.as_ref().and_then(|pick| pick(crate::POINTS_FILTERS));
+        if let Some(path) = picked {
+            st.ref_path = Some(path);
+            merge_references(app, &mut st);
+        }
+    }
+    if delimiter_changed {
+        merge_references(app, &mut st);
+    }
+
     if import {
         run_import(app, &st);
         *open = false;
@@ -214,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn a_carnet_with_angle_distance_shots_opens_the_dialog_needing_a_station() {
+    fn a_carnet_with_angle_distance_shots_opens_the_dialog_listing_its_rows() {
         let mut app = app_with_doc();
         let path = std::env::temp_dir().join(format!("cadcraft-ui-gsi-radial-{}.gsi", std::process::id()));
         std::fs::write(&path, "110001+00000P1 21.324+00005000 22.324+00010000 31..00+00010000\n").unwrap();
@@ -224,5 +392,53 @@ mod tests {
 
         let st = app.import_gsi_dlg.expect("dialog should open");
         assert!(st.needs_station);
+        assert_eq!(st.rows.len(), 1);
+        assert_eq!(st.rows[0].id, "P1");
+        assert_eq!(st.rows[0].role, Role::Measure);
+    }
+
+    #[test]
+    fn using_a_coordinate_row_as_station_prefills_its_coordinates() {
+        let mut app = app_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-ui-gsi-station-{}.gsi", std::process::id()));
+        std::fs::write(
+            &path,
+            "110001+00000STA 81..00+00001000000 82..00+00001000000 83..00+00000100000\n\
+             110002+00000P2 21.324+00005000 22.324+00010000 31..00+00010000\n",
+        )
+        .unwrap();
+
+        open(&mut app, path.to_string_lossy().to_string());
+        let _ = std::fs::remove_file(&path);
+        let mut st = app.import_gsi_dlg.expect("dialog should open");
+
+        let i = st.rows.iter().position(|r| r.id == "STA").expect("station row present");
+        use_as_station(&mut st, i);
+
+        assert_eq!(st.station_x, "1000");
+        assert_eq!(st.station_y, "1000");
+        assert_eq!(st.rows[i].role, Role::Station);
+    }
+
+    #[test]
+    fn merging_a_references_file_fills_matching_rows_and_tags_them() {
+        let mut app = app_with_doc();
+        let gsi_path = std::env::temp_dir().join(format!("cadcraft-ui-gsi-refmerge-{}.gsi", std::process::id()));
+        std::fs::write(&gsi_path, "110001+00000R1 21.324+00005000 22.324+00010000 31..00+00010000\n").unwrap();
+        open(&mut app, gsi_path.to_string_lossy().to_string());
+        let _ = std::fs::remove_file(&gsi_path);
+        let mut st = app.import_gsi_dlg.clone().expect("dialog should open");
+
+        let csv_path = std::env::temp_dir().join(format!("cadcraft-ui-gsi-refs-{}.csv", std::process::id()));
+        std::fs::write(&csv_path, "ID;X;Y;Z\nR1;2000.0;3000.0;50.0\n").unwrap();
+        st.ref_path = Some(csv_path.to_string_lossy().to_string());
+        merge_references(&mut app, &mut st);
+        let _ = std::fs::remove_file(&csv_path);
+
+        assert_eq!(st.ref_matched, 1);
+        let row = st.rows.iter().find(|r| r.id == "R1").unwrap();
+        assert_eq!(row.x, Some(2000.0));
+        assert_eq!(row.role, Role::Reference);
+        assert_eq!(usable_references(&st).len(), 1);
     }
 }

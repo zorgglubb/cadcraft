@@ -257,7 +257,7 @@
 	Shapefiles (SHP)	Файли Shapefile (SHP)
 	Images (JPEG, TIFF, PNG)	Зображення (JPEG, TIFF, PNG)
 	Survey carnets (GSI)	Журнали вимірювань (GSI)
-	Point lists (CSV)	Списки точок (CSV)
+	Point lists (CSV, TXT)	Списки точок (CSV, TXT)
 	EDIGEO sheets (VEC)	Листи EDIGEO (VEC)
 	Dynamic	Динамічно
 	Dynamic Dimensions	Динамічні розміри
@@ -1494,7 +1494,14 @@
 	VO (gon)	V0 (гон)
 	VO: {vo} gon	V0: {vo} гон
 	Zenith (gon)	Зеніт (гон)
-	{n} point(s) read; a station is needed for its angle/distance shots	Прочитано {n} точок(и); для вимірів кут/відстань потрібна станція
+	{n} point(s) read; right-click a row to tag it Station or Reference	Прочитано {n} точок(и); клацніть правою кнопкою на рядку, щоб позначити Станцію або Орієнтир
+	{n} tagged reference(s) with coordinates and an Hz reading	Позначено {n} орієнтир(ів) з координатами та відліком Hz
+	Use as station	Використати як станцію
+	Mark as reference	Позначити як орієнтир
+	Mark as measured point	Позначити як виміряну точку
+	Import known references...	Імпортувати відомі орієнтири...
+	{n} matched	{n} збігів
+	Parse Points CSV/TXT	Розібрати точки CSV/TXT
 	Station X/Y are required	Потрібні координати X/Y станції
 	At least one observation is required	Потрібне принаймні одне спостереження
 	Inserted {n} point(s)	Вставлено {n} точок(и)

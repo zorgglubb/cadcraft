@@ -209,8 +209,11 @@ pub const SHP_FILTERS: &[FileFilter] = &[("Shapefiles (SHP)", &["shp"])];
 pub const IMAGE_FILTERS: &[FileFilter] = &[("Images (JPEG, TIFF, PNG)", &["jpg", "jpeg", "tif", "tiff", "png"])];
 /// Leica/Geo GSI survey carnets (`TOPO.IMPORT_GSI`).
 pub const GSI_FILTERS: &[FileFilter] = &[("Survey carnets (GSI)", &["gsi"])];
-/// Point lists (`TOPO.IMPORT_POINTS`): a plain CSV file, one point per line.
-pub const POINTS_FILTERS: &[FileFilter] = &[("Point lists (CSV)", &["csv"])];
+/// Point lists (`TOPO.IMPORT_POINTS`): a plain CSV or TXT file, one point per line - the command
+/// itself is named "CSV/TXT" (`.csv` and `.txt` are both common total-station export
+/// extensions), so both are offered by default rather than only `.csv`; the picker's own "All
+/// files" entry still covers anything with a different extension.
+pub const POINTS_FILTERS: &[FileFilter] = &[("Point lists (CSV, TXT)", &["csv", "txt"])];
 /// EDIGEO cadastral exchange sheets (`TOPO.IMPORT_EDIGEO`): one `.VEC` file per parcel sheet.
 pub const EDIGEO_FILTERS: &[FileFilter] = &[("EDIGEO sheets (VEC)", &["vec"])];
 

@@ -202,7 +202,7 @@
 	Shapefiles (SHP)	Fichiers Shapefile (SHP)
 	Images (JPEG, TIFF, PNG)	Images (JPEG, TIFF, PNG)
 	Survey carnets (GSI)	Carnets topo (GSI)
-	Point lists (CSV)	Listes de points (CSV)
+	Point lists (CSV, TXT)	Listes de points (CSV, TXT)
 	EDIGEO sheets (VEC)	Feuilles EDIGEO (VEC)
 	Dynamic Dimensions	Cotations dynamiques
 	Dynamic Input	Saisie dynamique
@@ -1173,7 +1173,14 @@
 	VO (gon)	V0 (gon)
 	VO: {vo} gon	V0 : {vo} gon
 	Zenith (gon)	Zénith (gon)
-	{n} point(s) read; a station is needed for its angle/distance shots	{n} point(s) lu(s) ; une station est nécessaire pour ses visées angle/distance
+	{n} point(s) read; right-click a row to tag it Station or Reference	{n} point(s) lu(s) ; clic droit sur une ligne pour la marquer Station ou Référence
+	{n} tagged reference(s) with coordinates and an Hz reading	{n} référence(s) marquée(s) avec coordonnées et une lecture Hz
+	Use as station	Utiliser comme station
+	Mark as reference	Marquer comme référence
+	Mark as measured point	Marquer comme point mesuré
+	Import known references...	Importer des références connues...
+	{n} matched	{n} correspondance(s)
+	Parse Points CSV/TXT	Analyser les points CSV/TXT
 	Station X/Y are required	La station X/Y est requise
 	At least one observation is required	Au moins une observation est requise
 	Inserted {n} point(s)	{n} point(s) inséré(s)
