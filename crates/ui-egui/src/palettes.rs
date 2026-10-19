@@ -847,6 +847,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut custom_set: Option<Value> = None;
     let mut attrib_set: Option<Value> = None;
     let mut shp_attr_set: Option<Value> = None;
+    let mut data_attr_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1127,6 +1128,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
             }
         }
+        // An entity DATA.ASSIGN_TABLE attached a user-defined attribute table to.
+        if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(&e, cadcraft_doc::import_attrs::ATTR_TABLE_APPID) {
+            group(ui, "Attribute Table");
+            prop_row(ui, "Table", |ui| read_only(ui, &table));
+            for (k, v) in &fields {
+                prop_row(ui, k, |ui| {
+                    if let Some(nv) = edit_field(ui, ui.id().with(("datattr", e.handle, k)), v.clone()) {
+                        data_attr_set = Some(json!({ "handle": e.handle.hex(), "key": k, "value": nv }));
+                    }
+                });
+            }
+        }
     }
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
@@ -1140,5 +1153,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     if let Some(p) = shp_attr_set {
         let _ = app.run("plan.set_shp_attribute", p);
+    }
+    if let Some(p) = data_attr_set {
+        let _ = app.run("data.set_attribute", p);
     }
 }

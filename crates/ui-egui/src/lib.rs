@@ -26,6 +26,7 @@ pub mod docking;
 pub mod hatchdlg;
 mod mtext_editor;
 pub mod spacemouse;
+pub mod tabledlg;
 // The External References palette.
 pub mod xrefs;
 
@@ -274,6 +275,10 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// The Carroyage dialog while open or picking its window ([`carroyagedlg`]).
     pub carroyage_dlg: Option<carroyagedlg::State>,
+    /// The Attribute Table... dialog while open ([`tabledlg`]).
+    pub new_table_dlg: Option<tabledlg::NewTableState>,
+    /// The Assign Table... dialog while open or picking entities ([`tabledlg`]).
+    pub assign_table_dlg: Option<tabledlg::AssignTableState>,
 }
 
 impl CadApp {
@@ -313,6 +318,8 @@ impl CadApp {
             hatch_dlg: None,
             bedit: bedit::State::default(),
             carroyage_dlg: None,
+            new_table_dlg: None,
+            assign_table_dlg: None,
         }
     }
 
@@ -605,6 +612,7 @@ impl CadApp {
         managers::plot_window_resume(self, ctx);
         hatchdlg::resume(self);
         carroyagedlg::resume(self);
+        tabledlg::resume_assign(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

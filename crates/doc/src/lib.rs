@@ -105,6 +105,9 @@ pub struct Drawing {
     pub ucss: Vec<Ucs>,
     pub layer_states: Vec<LayerState>,
     pub groups: Vec<Group>,
+    /// User-defined attribute table schemas ("table d'attributs"), authored by hand and then
+    /// attached to entities by `data.assign_table` - see [`AttributeTableDef`].
+    pub attribute_tables: Vec<AttributeTableDef>,
     /// Plot style tables kept with the drawing (STYLESMANAGER); they shadow built-in tables of
     /// the same name.
     pub plot_style_tables: Vec<PlotStyleTable>,
@@ -175,6 +178,7 @@ impl Drawing {
             ucss: Vec::new(),
             layer_states: Vec::new(),
             groups: Vec::new(),
+            attribute_tables: Vec::new(),
             plot_style_tables: Vec::new(),
             constraints: Vec::new(),
             parametric: Parametric::default(),
@@ -202,6 +206,9 @@ impl Drawing {
 
     pub fn layer(&self, name: &str) -> Option<&Layer> {
         self.layers.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+    }
+    pub fn attribute_table(&self, name: &str) -> Option<&AttributeTableDef> {
+        self.attribute_tables.iter().find(|t| t.name.eq_ignore_ascii_case(name))
     }
     pub fn layer_mut(&mut self, name: &str) -> Option<&mut Layer> {
         self.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name))

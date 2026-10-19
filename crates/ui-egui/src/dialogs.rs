@@ -27,6 +27,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "imagepreview" => crate::image_preview::dialog(app, ctx, &mut open),
         "crs" => crate::crsdlg::dialog(app, ctx, &mut open),
         "carroyage" => crate::carroyagedlg::dialog(app, ctx, &mut open),
+        "newtable" => crate::tabledlg::new_table_dialog(app, ctx, &mut open),
+        "assigntable" => crate::tabledlg::assign_table_dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),

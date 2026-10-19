@@ -13,6 +13,11 @@ use crate::{Entity, RawTag};
 /// XDATA application id for attributes imported from a Shapefile's `.dbf` (`plan.import_shp`).
 pub const SHP_APPID: &str = "CADCRAFT_SHP";
 
+/// XDATA application id for a user-defined attribute table attached by `data.assign_table`
+/// (table *schema* lives separately, on `Drawing::attribute_tables`; this is only the per-entity
+/// table name + field values, same shape as the Shapefile mechanism above).
+pub const ATTR_TABLE_APPID: &str = "CADCRAFT_ATTRTABLE";
+
 /// Sentinel key the table name rides on, as the first field-shaped `1000` tag after the APPID
 /// marker - chosen unlikely to collide with a real field name, which is why it isn't simply
 /// `"table"`. There is nowhere else to put it: XDATA is a flat list of `(code, value)` pairs, and

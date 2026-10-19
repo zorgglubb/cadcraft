@@ -1403,6 +1403,7 @@
 	Export Shapefile (SHP)	Експорт Shapefile (SHP)
 	Set Shapefile Attribute	Встановити атрибут Shapefile
 	Attributes	Атрибути
+	Attribute Table	Таблиця атрибутів
 	Block Attributes	Атрибути блока
 	Coordinate System	Система координат
 	Assign Coordinate System	Призначити систему координат
@@ -1441,3 +1442,23 @@
 	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Попередній перегляд: {w}×{h} мм на папері, {crosses} хрест(ів)
 	Create	Створити
 	Carroyage created in layout {layout} on layer {layer}	Карройяж створено на презентації {layout}, шар {layer}
+	Data	Дані
+	Attribute Table...	Таблиця атрибутів...
+	Assign Table...	Призначити таблицю...
+	Remove Table	Видалити таблицю
+	List Attribute Tables	Список таблиць атрибутів
+	Set Table Attribute	Встановити атрибут таблиці
+	Pick Entities	Вибрати об'єкти
+	Table name	Назва таблиці
+	Fields	Поля
+	Add field	Додати поле
+	Character	Символьний
+	Integer	Цілий
+	Decimal	Десятковий
+	Date	Дата
+	Attribute table {name} created	Таблицю атрибутів {name} створено
+	No attribute table yet.	Ще немає таблиці атрибутів.
+	Select entities	Вибрати об'єкти
+	No entity selected yet.	Ще не вибрано жодного об'єкта.
+	{n} entity(ies) selected	Вибрано {n} об'єкт(ів)
+	Table {table} assigned to {n} entity(ies)	Таблицю {table} призначено {n} об'єкт(ам)

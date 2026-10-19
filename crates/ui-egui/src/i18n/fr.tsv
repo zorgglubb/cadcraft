@@ -1081,6 +1081,7 @@
 	Export Shapefile (SHP)	Exporter en SHP
 	Set Shapefile Attribute	Définir un attribut Shapefile
 	Attributes	Attributs
+	Attribute Table	Table d'attributs
 	Block Attributes	Attributs de bloc
 	Coordinate System	Système de coordonnées
 	Assign Coordinate System	Attribuer un système de coordonnées
@@ -1119,3 +1120,23 @@
 	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Aperçu : {w}×{h} mm sur papier, {crosses} croix
 	Create	Créer
 	Carroyage created in layout {layout} on layer {layer}	Carroyage créé dans la présentation {layout}, calque {layer}
+	Data	Données
+	Attribute Table...	Table d'attributs...
+	Assign Table...	Attribuer la table...
+	Remove Table	Enlever la table
+	List Attribute Tables	Liste des tables d'attributs
+	Set Table Attribute	Définir un attribut de table
+	Pick Entities	Sélectionner des entités
+	Table name	Nom de la table
+	Fields	Champs
+	Add field	Ajouter un champ
+	Character	Caractère
+	Integer	Entier
+	Decimal	Décimal
+	Date	Date
+	Attribute table {name} created	Table d'attributs {name} créée
+	No attribute table yet.	Aucune table d'attributs pour le moment.
+	Select entities	Sélectionner les entités
+	No entity selected yet.	Aucune entité sélectionnée.
+	{n} entity(ies) selected	{n} entité(s) sélectionnée(s)
+	Table {table} assigned to {n} entity(ies)	Table {table} attribuée à {n} entité(s)

@@ -7,9 +7,10 @@ use crate::CadApp;
 
 /// The top-level menus, in order. "Plan" groups the drawing-level plan/basemap tools (Shapefile
 /// import/export, coordinate system tagging, georeferenced image import), the way Covadis groups
-/// its own "Map" menu. The three "Topo …" menus (Calculations, 2D, 3D) group the
-/// Topo/Foncier/Terrain commands the way Covadis groups its own "Cov. Calculs" / "Covadis 2D" /
-/// "Covadis 3D" tabs - each command's own `.menu()` path supplies the rest.
+/// its own "Map" menu. "Data" groups the user-defined attribute-table tools (`cmd::data`), the
+/// way Covadis groups its own "Table d'attributs" tools. The three "Topo …" menus (Calculations,
+/// 2D, 3D) group the Topo/Foncier/Terrain commands the way Covadis groups its own "Cov. Calculs"
+/// / "Covadis 2D" / "Covadis 3D" tabs - each command's own `.menu()` path supplies the rest.
 pub const MENUS: &[&str] = &[
     "File",
     "Edit",
@@ -18,6 +19,7 @@ pub const MENUS: &[&str] = &[
     "Format",
     "Tools",
     "Plan",
+    "Data",
     "Topo Calculations",
     "Topo 2D",
     "Topo 3D",
@@ -291,6 +293,17 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // (script, control channel, MCP) with real parameters runs the plain command as given.
         "plan.carroyage" if params.is_null() && app.session.state().is_ok() => {
             crate::carroyagedlg::open(app);
+            Ok(Value::Null)
+        }
+        // Typed, menu or toolbar (no parameters): needs the field list / table + selection built
+        // up first, so these open their dialogs instead of erring on missing `fields`/`name`. A
+        // JSON call (script, control channel, MCP) with real parameters runs the plain command.
+        "data.new_table" if params.is_null() && app.session.state().is_ok() => {
+            crate::tabledlg::open_new(app);
+            Ok(Value::Null)
+        }
+        "data.assign_table" if params.is_null() && app.session.state().is_ok() => {
+            crate::tabledlg::open_assign(app);
             Ok(Value::Null)
         }
         "plan.image_show" if params.is_null() => {

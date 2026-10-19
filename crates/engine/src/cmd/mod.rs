@@ -8,6 +8,7 @@ mod audit;
 pub(crate) mod blocks;
 pub mod clipboard;
 pub mod constraints;
+mod data;
 mod draw;
 mod draw2;
 mod draworder;
@@ -210,6 +211,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(table::specs());
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
+        v.extend(data::specs());
         v.extend(lisp::specs());
         v.extend(topo::specs());
         v.extend(topo_points::specs());

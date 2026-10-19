@@ -673,6 +673,9 @@ pub struct Session {
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
     /// The window last picked with CARROYAGEPICK (the Carroyage dialog's "Select window" button).
     pub carroyage_pick: Option<(Vec2, Vec2)>,
+    /// The entities last picked with DATA.PICK_ENTITIES (the Assign Table dialog's "Select
+    /// entities" button).
+    pub table_pick: Option<Vec<Handle>>,
 }
 
 impl Default for Session {
@@ -722,6 +725,7 @@ impl Session {
             lisp_last: None,
             hatch_picks: None,
             carroyage_pick: None,
+            table_pick: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

@@ -9,6 +9,70 @@ use serde::{Deserialize, Serialize};
 
 use crate::{EntityStore, Lineweight};
 
+/// A field's type in a user-defined attribute table ([`AttributeTableDef`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttributeFieldKind {
+    #[default]
+    Character,
+    Integer,
+    Decimal,
+    Date,
+}
+impl AttributeFieldKind {
+    /// Whether `value` is well-formed for this kind (an empty string always is: an unset field).
+    pub fn validate(self, value: &str) -> bool {
+        if value.is_empty() {
+            return true;
+        }
+        match self {
+            AttributeFieldKind::Character => true,
+            AttributeFieldKind::Integer => value.parse::<i64>().is_ok(),
+            AttributeFieldKind::Decimal => value.parse::<f64>().is_ok_and(f64::is_finite),
+            AttributeFieldKind::Date => {
+                // ISO 8601 calendar date (YYYY-MM-DD), checked by hand: no chrono dependency here.
+                let b = value.as_bytes();
+                let digits = |s: &[u8]| s.iter().all(u8::is_ascii_digit);
+                b.len() == 10
+                    && b[4] == b'-'
+                    && b[7] == b'-'
+                    && digits(&b[..4])
+                    && digits(&b[5..7])
+                    && digits(&b[8..10])
+                    && value[5..7].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m))
+                    && value[8..10].parse::<u32>().is_ok_and(|d| (1..=31).contains(&d))
+            }
+        }
+    }
+}
+
+/// One named, typed field in an [`AttributeTableDef`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttributeField {
+    pub name: String,
+    pub kind: AttributeFieldKind,
+}
+
+/// A user-defined "table d'attributs" (Covadis terms): a named schema of typed fields that
+/// `data.assign_table` attaches to entities (as XDATA, under `cadcraft_doc::import_attrs`'s
+/// generic per-entity table+fields mechanism, with its own application id) and the Properties
+/// palette then lets a person fill in per entity. Unlike the Shapefile import's table+fields
+/// (also built on `import_attrs`), this is a *definition* the person authors by hand before
+/// anything is attached - DXF has no equivalent table, so it round-trips only through
+/// CADCraft's own save format, not through DXF export.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttributeTableDef {
+    pub name: String,
+    pub fields: Vec<AttributeField>,
+}
+impl AttributeTableDef {
+    pub fn new(name: &str) -> Self {
+        AttributeTableDef { name: name.into(), fields: Vec::new() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Layer {
