@@ -839,14 +839,14 @@ fn glyph(
         num(c, dx);
         c.push(' ');
         num(c, dy);
-        c.push_str(" Td\n");
+        c.push_str(" Td ");
     } else {
         for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
             num(c, v);
             c.push(' ');
         }
         pt(c, map.pt(g.origin));
-        c.push_str(" Tm\n");
+        c.push_str(" Tm ");
     }
     let _ = writeln!(c, "<{:04X}> Tj", g.gid);
     *last_run = Some(TextRun { handle, gx: g.x, gy: g.y, origin: g.origin });

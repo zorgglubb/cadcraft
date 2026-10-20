@@ -205,15 +205,32 @@ fn check_xref(bytes: &[u8]) {
     }
 }
 
-/// The text matrices (`a b c d e f Tm`) of the content, in order.
+/// The effective text matrix (`a b c d e f`) each glyph is placed with, in order - whether its
+/// line sets it directly (`... Tm <hex> Tj`) or, chaining the same run, moves by a relative
+/// offset from the glyph before it (`dx dy Td <hex> Tj`; PDF's own rule for `Td`: `a b c d`
+/// unchanged, `e' = e + dx*a + dy*c`, `f' = f + dx*b + dy*d`).
 fn matrices(pdf: &str) -> Vec<[f64; 6]> {
-    pdf.lines()
-        .filter(|l| l.ends_with(" Tj") && l.contains(" Tm "))
-        .map(|l| {
-            let v: Vec<f64> = l.split(" Tm ").next().unwrap().split_whitespace().map(|x| x.parse().unwrap()).collect();
-            [v[0], v[1], v[2], v[3], v[4], v[5]]
-        })
-        .collect()
+    let mut cur = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let mut out = Vec::new();
+    for l in pdf.lines() {
+        if !l.ends_with(" Tj") {
+            continue;
+        }
+        if let Some(rest) = l.strip_suffix(" Tj").and_then(|l| l.rsplit_once(' ')).map(|(head, _hex)| head) {
+            if let Some(nums) = rest.strip_suffix(" Tm") {
+                let v: Vec<f64> = nums.split_whitespace().map(|x| x.parse().unwrap()).collect();
+                cur = [v[0], v[1], v[2], v[3], v[4], v[5]];
+                out.push(cur);
+            } else if let Some(nums) = rest.strip_suffix(" Td") {
+                let v: Vec<f64> = nums.split_whitespace().map(|x| x.parse().unwrap()).collect();
+                let (dx, dy) = (v[0], v[1]);
+                let [a, b, c, d, e, f] = cur;
+                cur = [a, b, c, d, e + dx * a + dy * c, f + dx * b + dy * d];
+                out.push(cur);
+            }
+        }
+    }
+    out
 }
 
 /// The embedded font file (FontFile2 stream data).
@@ -252,6 +269,12 @@ fn truetype_text_is_embedded_as_text() {
     let step = m[1][4] - m[0][4];
     assert!((step - 0.6 * m[0][0]).abs() < 0.01, "advance {step} for em {}", m[0][0]);
     assert!(m.windows(2).all(|w| (w[0][5] - w[1][5]).abs() < 1e-3), "one baseline");
+    // A PDF reader (Illustrator among them) treats a Tm-per-glyph sequence as that many separate
+    // one-character text objects: "ABBA" is one TEXT entity, so only its first glyph gets a fresh
+    // Tm - the rest chain with a relative Td, reading back as one continuous text object.
+    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
+    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
+    assert_eq!((tm, td), (1, 3), "{p}");
 }
 
 #[test]
