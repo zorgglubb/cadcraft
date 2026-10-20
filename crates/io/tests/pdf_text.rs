@@ -278,6 +278,28 @@ fn truetype_text_is_embedded_as_text() {
 }
 
 #[test]
+fn rotated_text_glyphs_still_chain_with_td() {
+    let mut d = drawing();
+    text(&mut d, &Space::Model, "Real", (0.0, 0.0), "ABBA", 17.0_f64.to_radians(), 1.0, 0.0);
+    let p = pdf(&d, &Space::Model, json!({}));
+    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
+    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
+    assert_eq!((tm, td), (1, 3), "{p}");
+}
+
+#[test]
+fn rotated_text_at_lambert93_scale_coordinates_still_chains() {
+    let mut d = drawing();
+    // French Lambert-93 style coordinates: ~6-7 significant digits before the decimal point,
+    // small text height - the regime where naive glyph-basis recomputation loses precision.
+    text(&mut d, &Space::Model, "Real", (650_123.456, 6_860_987.654), "ABBA", 17.0_f64.to_radians(), 1.0, 0.0);
+    let p = pdf(&d, &Space::Model, json!({}));
+    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
+    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
+    assert_eq!((tm, td), (1, 3), "{p}");
+}
+
+#[test]
 fn the_subset_is_a_valid_truetype_font() {
     let mut d = drawing();
     text(&mut d, &Space::Model, "Real", (0.0, 0.0), "A", 0.0, 1.0, 0.0);
