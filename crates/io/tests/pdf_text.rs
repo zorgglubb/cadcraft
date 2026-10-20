@@ -205,32 +205,73 @@ fn check_xref(bytes: &[u8]) {
     }
 }
 
-/// The effective text matrix (`a b c d e f`) each glyph is placed with, in order - whether its
-/// line sets it directly (`... Tm <hex> Tj`) or, chaining the same run, moves by a relative
-/// offset from the glyph before it (`dx dy Td <hex> Tj`; PDF's own rule for `Td`: `a b c d`
-/// unchanged, `e' = e + dx*a + dy*c`, `f' = f + dx*b + dy*d`).
+/// The glyph widths a font's `/W` array declares (CID → width, 1000 units/em), as written by
+/// `write_font`: `"<gid> [<width>] "` repeated.
+fn widths(pdf: &str) -> std::collections::HashMap<u32, f64> {
+    let mut m = std::collections::HashMap::new();
+    let Some(i) = pdf.find("/W [") else { return m };
+    let rest = &pdf[i + 4..];
+    let Some(end) = rest.find(']') else { return m };
+    let mut it = rest[..end].split(['[', ']']).flat_map(str::split_whitespace);
+    while let (Some(gid), Some(w)) = (it.next(), it.next()) {
+        if let (Ok(gid), Ok(w)) = (gid.parse(), w.parse()) {
+            m.insert(gid, w);
+        }
+    }
+    m
+}
+
+/// The effective text matrix (`a b c d e f`) each glyph is placed with, in order. A glyph on its
+/// own `Tm` (then a lone `<hex> Tj`) is placed exactly there; a glyph inside a `TJ` array
+/// (`[<hex> adj <hex> adj <hex>] TJ`) is placed at the matrix the array's `Tm` set, each one after
+/// the first moved along its own baseline by the font's declared width (`/W`) of the glyph before
+/// it, less the `TJ` adjustment (PDF's rule for a `TJ` number: it is in thousandths of a
+/// text-space unit, subtracted from the glyph's own advance before the next one is placed) - the
+/// same `e' = e + dx*a + dy*c, f' = f + dx*b + dy*d` a `Td` of that `(dx, 0)` would give, since
+/// `TJ` never moves off the baseline.
 fn matrices(pdf: &str) -> Vec<[f64; 6]> {
+    let w = widths(pdf);
+    let gid_of = |hex: &str| u32::from_str_radix(hex.trim_start_matches('<').trim_end_matches('>'), 16).unwrap();
     let mut cur = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     let mut out = Vec::new();
     for l in pdf.lines() {
-        if !l.ends_with(" Tj") {
-            continue;
-        }
-        if let Some(rest) = l.strip_suffix(" Tj").and_then(|l| l.rsplit_once(' ')).map(|(head, _hex)| head) {
-            if let Some(nums) = rest.strip_suffix(" Tm") {
-                let v: Vec<f64> = nums.split_whitespace().map(|x| x.parse().unwrap()).collect();
-                cur = [v[0], v[1], v[2], v[3], v[4], v[5]];
-                out.push(cur);
-            } else if let Some(nums) = rest.strip_suffix(" Td") {
-                let v: Vec<f64> = nums.split_whitespace().map(|x| x.parse().unwrap()).collect();
-                let (dx, dy) = (v[0], v[1]);
+        if let Some(nums) = l.strip_suffix(" Tm") {
+            let v: Vec<f64> = nums.split_whitespace().map(|x| x.parse().unwrap()).collect();
+            cur = [v[0], v[1], v[2], v[3], v[4], v[5]];
+        } else if l.strip_suffix(" Tj").is_some_and(|h| h.starts_with('<')) {
+            out.push(cur);
+        } else if let Some(body) = l.strip_prefix('[').and_then(|l| l.strip_suffix("] TJ")) {
+            let toks: Vec<&str> = body.split_whitespace().collect();
+            let Some((first, rest)) = toks.split_first() else { continue };
+            out.push(cur);
+            let mut prev_gid = gid_of(first);
+            for pair in rest.chunks(2) {
+                let [adj, hex] = pair else { break };
+                let dx = (w.get(&prev_gid).copied().unwrap_or(0.0) - adj.parse::<f64>().unwrap()) / 1000.0;
                 let [a, b, c, d, e, f] = cur;
-                cur = [a, b, c, d, e + dx * a + dy * c, f + dx * b + dy * d];
+                cur = [a, b, c, d, e + dx * a, f + dx * b];
                 out.push(cur);
+                prev_gid = gid_of(hex);
             }
         }
     }
     out
+}
+
+/// Number of fresh text-show operations (`Tm` lines) and glyphs chained into them beyond the
+/// first of each (what used to be counted as `Tm`-per-glyph vs `Td`-per-glyph; now one `Tm` per
+/// operation and the rest folded into its `TJ` array - see `matrices`'s doc comment for why a
+/// single operation, not how its glyphs are moved into place, is what keeps a PDF reader from
+/// splitting the run into separate one-character text objects).
+fn runs_and_chained(pdf: &str) -> (usize, usize) {
+    let runs = pdf.lines().filter(|l| l.ends_with(" Tm")).count();
+    (runs, glyph_count(pdf) - runs)
+}
+
+/// How many glyphs are shown as text (one hex code each, whether on a lone `Tj` line or inside a
+/// `TJ` array).
+fn glyph_count(pdf: &str) -> usize {
+    pdf.lines().filter(|l| l.ends_with(" Tj") || l.contains("] TJ")).map(|l| l.matches('<').count()).sum()
 }
 
 /// The embedded font file (FontFile2 stream data).
@@ -257,8 +298,7 @@ fn truetype_text_is_embedded_as_text() {
     assert!(p.contains("/W [1 [600] 2 [600]]"), "widths");
     // The page uses the font; four glyphs written as text, in a text object.
     assert!(p.contains("/Font << /F0 "));
-    let tj: Vec<&str> = p.lines().filter(|l| l.ends_with(" Tj")).map(|l| l.rsplit(' ').nth(1).unwrap()).collect();
-    assert_eq!(tj, ["<0001>", "<0002>", "<0002>", "<0001>"]);
+    assert!(p.contains("[<0001> 0 <0002> 0 <0002> 0 <0001>] TJ"), "one show-text operation for the whole word: {p}");
     assert!(p.contains("BT\n/F0 1 Tf\n") && p.contains("ET\n"));
     assert_eq!(p.matches("BT\n").count(), p.matches("ET\n").count());
     // No filled outlines left for them.
@@ -269,22 +309,18 @@ fn truetype_text_is_embedded_as_text() {
     let step = m[1][4] - m[0][4];
     assert!((step - 0.6 * m[0][0]).abs() < 0.01, "advance {step} for em {}", m[0][0]);
     assert!(m.windows(2).all(|w| (w[0][5] - w[1][5]).abs() < 1e-3), "one baseline");
-    // A PDF reader (Illustrator among them) treats a Tm-per-glyph sequence as that many separate
-    // one-character text objects: "ABBA" is one TEXT entity, so only its first glyph gets a fresh
-    // Tm - the rest chain with a relative Td, reading back as one continuous text object.
-    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
-    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
-    assert_eq!((tm, td), (1, 3), "{p}");
+    // A PDF reader (Illustrator among them) treats each Tj/TJ operation as its own text object:
+    // "ABBA" is one TEXT entity, so its four glyphs come from one `Tm` (the operation's start)
+    // and one `TJ` array (all four glyphs), not four separate operations.
+    assert_eq!(runs_and_chained(&p), (1, 3), "{p}");
 }
 
 #[test]
-fn rotated_text_glyphs_still_chain_with_td() {
+fn rotated_text_glyphs_still_chain() {
     let mut d = drawing();
     text(&mut d, &Space::Model, "Real", (0.0, 0.0), "ABBA", 17.0_f64.to_radians(), 1.0, 0.0);
     let p = pdf(&d, &Space::Model, json!({}));
-    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
-    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
-    assert_eq!((tm, td), (1, 3), "{p}");
+    assert_eq!(runs_and_chained(&p), (1, 3), "{p}");
 }
 
 #[test]
@@ -294,9 +330,7 @@ fn rotated_text_at_lambert93_scale_coordinates_still_chains() {
     // small text height - the regime where naive glyph-basis recomputation loses precision.
     text(&mut d, &Space::Model, "Real", (650_123.456, 6_860_987.654), "ABBA", 17.0_f64.to_radians(), 1.0, 0.0);
     let p = pdf(&d, &Space::Model, json!({}));
-    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
-    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
-    assert_eq!((tm, td), (1, 3), "{p}");
+    assert_eq!(runs_and_chained(&p), (1, 3), "{p}");
 }
 
 #[test]
@@ -382,10 +416,9 @@ fn text_seen_through_a_viewport_and_on_layers() {
     d.add(&paper, Common::default(), EntityKind::Viewport(vp)).unwrap();
     text(&mut d, &paper, "Real", (20.0, 20.0), "B", 0.0, 1.0, 0.0);
     let p = pdf(&d, &paper, json!({}));
-    let tj = p.lines().filter(|l| l.ends_with(" Tj")).count();
     // "AB" inside, the paper-space "B", and the glyph of "BA" left of the edge: real text. The
     // glyph the edge cuts stays a (clipped) outline.
-    assert_eq!(tj, 4, "{p}");
+    assert_eq!(glyph_count(&p), 4, "{p}");
     assert!(p.contains("h\nf\n"), "the cut glyph is an outline");
     // Text sits in its layer's marked content.
     let first_bt = p.find("BT\n").unwrap();
@@ -422,9 +455,7 @@ fn multi_glyph_text_drawn_directly_in_paper_space_chains() {
     let paper = Space::Paper("Layout1".into());
     text(&mut d, &paper, "Real", (20.0, 20.0), "ABBA", 0.0, 1.0, 0.0);
     let p = pdf(&d, &paper, json!({}));
-    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
-    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
-    assert_eq!((tm, td), (1, 3), "{p}");
+    assert_eq!(runs_and_chained(&p), (1, 3), "{p}");
 }
 
 #[test]
@@ -433,7 +464,5 @@ fn a_long_run_of_glyphs_keeps_chaining() {
     let s: String = "AB".repeat(20);
     text(&mut d, &Space::Model, "Real", (0.0, 0.0), &s, 17.0_f64.to_radians(), 1.0, 0.0);
     let p = pdf(&d, &Space::Model, json!({}));
-    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
-    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
-    assert_eq!((tm, td), (1, s.chars().count() - 1), "{p}");
+    assert_eq!(runs_and_chained(&p), (1, s.chars().count() - 1), "{p}");
 }

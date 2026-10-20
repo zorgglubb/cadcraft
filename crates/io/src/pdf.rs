@@ -637,9 +637,9 @@ fn content_stream(
         let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
         let text = u32::try_from(i).ok().and_then(|i| texts.get(&i));
         if text_font.is_some() && (text.is_none() || want != layer) {
+            flush_run(&mut c, &mut last_run);
             c.push_str("ET\n");
             text_font = None;
-            last_run = None;
         }
         if want != layer {
             flush(&mut c, &mut pending);
@@ -756,6 +756,7 @@ fn content_stream(
     }
     flush(&mut c, &mut pending);
     if text_font.is_some() {
+        flush_run(&mut c, &mut last_run);
         c.push_str("ET\n");
     }
     if layer.is_some() {
@@ -781,29 +782,57 @@ fn ext_gstates(alphas: &[u8]) -> String {
     out
 }
 
-/// The last glyph written in an open text object: its source entity and em-axes (world units,
-/// before `map`'s scale), and its origin - enough to place the next glyph with a relative `Td`
-/// instead of a fresh `Tm`, when it turns out to continue the same run (see `glyph`).
-#[derive(Clone, Copy)]
+/// A text-show operation (`Tj`/`TJ`) being built up: one or more glyphs of the same source
+/// entity and em-axes (world units, before `map`'s scale), placed along their shared baseline so
+/// far - `buf` holds the operands already decided (hex glyph codes, and the `TJ` horizontal
+/// adjustment between consecutive ones), `count` how many glyphs are in it. `gid` is the last
+/// glyph placed, to compute the next one's own advance-correcting adjustment.
 struct TextRun {
     handle: Handle,
     gx: Vec2,
     gy: Vec2,
     origin: Vec2,
+    gid: u16,
+    buf: String,
+    count: u32,
 }
 
-/// Write one glyph as text: opens a text object and sets the font when needed, then places the
-/// glyph with a text matrix (font size 1: the matrix axes are one em) - unless it continues
-/// `last_run` (the same source entity, font and em-axes as the glyph just written), in which case
-/// it is placed with `Td` instead, a relative move from the previous glyph's own text-space
-/// origin. A PDF reader (Illustrator among them) treats a `Tm`-per-glyph sequence as that many
-/// separate one-character text objects; chaining same-run glyphs with `Td` keeps them one
-/// continuous text object per line (or per wrapped MTEXT paragraph), matching how real text PDFs
-/// are normally written.
+/// Write `run`'s buffered glyphs as one show-text operation and clear it: a lone glyph as plain
+/// `<hex> Tj`, several as `[<hex> adj <hex> adj <hex>] TJ` (see `glyph`'s doc comment for why
+/// grouping them into one operation, rather than several `Tj`s moved into place with `Td`,
+/// matters).
+fn flush_run(c: &mut String, run: &mut Option<TextRun>) {
+    let Some(r) = run.take() else { return };
+    if r.count > 1 {
+        c.push('[');
+        c.push_str(&r.buf);
+        c.push_str("] TJ\n");
+    } else {
+        c.push_str(&r.buf);
+        c.push_str(" Tj\n");
+    }
+}
+
+/// Write one glyph as text: opens a text object and sets the font when needed, then either
+/// starts a fresh text-show operation with a text matrix (font size 1: the matrix axes are one
+/// em) or, when it continues `run` (the same source entity and em-axes as the glyphs buffered so
+/// far, placed where the last one's own advance would put it), appends to that operation instead.
+///
+/// Appending uses `TJ`'s horizontal adjustment - the amount by which a show-text operation's
+/// *own* glyph-width-based advance (from the font's declared `/W`, the same the glyph is
+/// embedded with) is short of the distance this glyph actually needs to move - rather than `Td`
+/// moving the text position between separate `Tj` calls: both place the glyph at the same exact
+/// point, but a PDF reader (Illustrator among them) treats each `Tj`/`TJ` operation as its own
+/// text object - a `Tm`-or-`Td`-per-glyph sequence of single-character `Tj`s reads back as that
+/// many separate one-character objects regardless of how they're moved into place, while packing
+/// a whole run into one `TJ` array reads back as the one continuous text object (a line, or a
+/// wrapped MTEXT paragraph) it was drawn as. `TJ`'s adjustment only moves along the run's own
+/// baseline, so a glyph that would need to move off it (a curve, a stacked fraction) still
+/// starts a fresh operation instead, as a changed entity or em-axes already did.
 fn glyph(
     c: &mut String,
     text_font: &mut Option<Option<usize>>,
-    last_run: &mut Option<TextRun>,
+    run: &mut Option<TextRun>,
     font: usize,
     handle: Handle,
     t: &cadcraft_render::PlotText,
@@ -812,20 +841,19 @@ fn glyph(
     if text_font.is_none() {
         c.push_str("BT\n");
         *text_font = Some(None);
-        *last_run = None;
+        flush_run(c, run);
     }
     if *text_font != Some(Some(font)) {
         let _ = writeln!(c, "/F{font} 1 Tf");
         *text_font = Some(Some(font));
-        *last_run = None;
+        flush_run(c, run);
     }
     let s = map.s * map.k;
     let g = &t.glyph;
     // Continuing the same entity's run only if the em-axes (rotation, height, width factor,
-    // obliquing) are unchanged - a straight `Td` move only means the right thing along a constant
-    // basis; anything else falls back to a fresh, always-correct `Tm`.
-    let run = last_run.filter(|r| r.handle == handle && r.gx.near(g.x, 1e-9) && r.gy.near(g.y, 1e-9));
-    let moved = run.and_then(|r| {
+    // obliquing) are unchanged - `TJ`'s adjustment only moves the right thing along a constant
+    // baseline; anything else falls back to a fresh, always-correct `Tm`.
+    let continuing = run.as_ref().filter(|r| r.handle == handle && r.gx.near(g.x, 1e-9) && r.gy.near(g.y, 1e-9)).and_then(|r| {
         let det = g.x.x * g.y.y - g.y.x * g.x.y;
         if det.abs() < 1e-12 {
             return None;
@@ -833,23 +861,35 @@ fn glyph(
         let d = g.origin - r.origin;
         let dx = (d.x * g.y.y - g.y.x * d.y) / det;
         let dy = (g.x.x * d.y - d.x * g.x.y) / det;
-        (dx.is_finite() && dy.is_finite()).then_some((dx, dy))
+        // A `TJ` adjustment can't move off the baseline: a non-zero `dy` (text that curves, or
+        // steps up or down, glyph to glyph) still needs its own `Tm`.
+        (dx.is_finite() && dy.is_finite() && dy.abs() < 1e-6).then_some((r.gid, dx))
     });
-    if let Some((dx, dy)) = moved {
-        num(c, dx);
-        c.push(' ');
-        num(c, dy);
-        c.push_str(" Td ");
-    } else {
-        for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
-            num(c, v);
-            c.push(' ');
+    match continuing {
+        Some((prev_gid, dx)) => {
+            let Some(r) = run.as_mut() else { return };
+            // The adjustment that corrects the show-text operation's own advance (the font's
+            // declared width of the glyph just placed, in the same 1000-units-per-em space as
+            // `/W`) to the distance this glyph actually needs to move.
+            let w0 = cadcraft_fonts::subset::advance(&g.face, prev_gid);
+            r.buf.push(' ');
+            num(&mut r.buf, w0 - dx * 1000.0);
+            let _ = write!(r.buf, " <{:04X}>", g.gid);
+            r.origin = g.origin;
+            r.gid = g.gid;
+            r.count += 1;
         }
-        pt(c, map.pt(g.origin));
-        c.push_str(" Tm ");
+        None => {
+            flush_run(c, run);
+            for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
+                num(c, v);
+                c.push(' ');
+            }
+            pt(c, map.pt(g.origin));
+            c.push_str(" Tm\n");
+            *run = Some(TextRun { handle, gx: g.x, gy: g.y, origin: g.origin, gid: g.gid, buf: format!("<{:04X}>", g.gid), count: 1 });
+        }
     }
-    let _ = writeln!(c, "<{:04X}> Tj", g.gid);
-    *last_run = Some(TextRun { handle, gx: g.x, gy: g.y, origin: g.origin });
 }
 
 /// A PDF text string: a literal with `(`, `)` and `\` escaped when it is printable ASCII,
