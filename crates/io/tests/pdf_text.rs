@@ -415,3 +415,25 @@ fn hostile_text_never_panics() {
     pdf(&d, &Space::Model, json!({}));
     pdf(&d, &Space::Model, json!({"compress": true}));
 }
+
+#[test]
+fn multi_glyph_text_drawn_directly_in_paper_space_chains() {
+    let mut d = drawing();
+    let paper = Space::Paper("Layout1".into());
+    text(&mut d, &paper, "Real", (20.0, 20.0), "ABBA", 0.0, 1.0, 0.0);
+    let p = pdf(&d, &paper, json!({}));
+    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
+    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
+    assert_eq!((tm, td), (1, 3), "{p}");
+}
+
+#[test]
+fn a_long_run_of_glyphs_keeps_chaining() {
+    let mut d = drawing();
+    let s: String = "AB".repeat(20);
+    text(&mut d, &Space::Model, "Real", (0.0, 0.0), &s, 17.0_f64.to_radians(), 1.0, 0.0);
+    let p = pdf(&d, &Space::Model, json!({}));
+    let tm = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Tm ")).count();
+    let td = p.lines().filter(|l| l.ends_with(" Tj") && l.contains(" Td ")).count();
+    assert_eq!((tm, td), (1, s.chars().count() - 1), "{p}");
+}
