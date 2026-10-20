@@ -627,6 +627,9 @@ fn content_stream(
     let mut layer: Option<u32> = None;
     // Inside a text object (`BT` … `ET`), with this font set.
     let mut text_font: Option<Option<usize>> = None;
+    // The last glyph placed in the currently open text object, if the next glyph can still
+    // continue it (`Td` instead of a fresh `Tm`) - see `glyph`'s doc comment.
+    let mut last_run: Option<TextRun> = None;
     // The transparency (percent) marks are drawn with, and those used on the page.
     let mut alpha: u8 = 0;
     let mut alphas: Vec<u8> = Vec::new();
@@ -636,6 +639,7 @@ fn content_stream(
         if text_font.is_some() && (text.is_none() || want != layer) {
             c.push_str("ET\n");
             text_font = None;
+            last_run = None;
         }
         if want != layer {
             flush(&mut c, &mut pending);
@@ -717,7 +721,7 @@ fn content_stream(
                     fill = Some(rgb);
                 }
                 if let Some((font, t)) = text {
-                    glyph(&mut c, &mut text_font, *font, t, map);
+                    glyph(&mut c, &mut text_font, &mut last_run, *font, p.handle, t, map);
                     continue;
                 }
                 let mut any = false;
@@ -777,25 +781,75 @@ fn ext_gstates(alphas: &[u8]) -> String {
     out
 }
 
+/// The last glyph written in an open text object: its source entity and em-axes (world units,
+/// before `map`'s scale), and its origin - enough to place the next glyph with a relative `Td`
+/// instead of a fresh `Tm`, when it turns out to continue the same run (see `glyph`).
+#[derive(Clone, Copy)]
+struct TextRun {
+    handle: Handle,
+    gx: Vec2,
+    gy: Vec2,
+    origin: Vec2,
+}
+
 /// Write one glyph as text: opens a text object and sets the font when needed, then places the
-/// glyph with a text matrix (font size 1: the matrix axes are one em).
-fn glyph(c: &mut String, text_font: &mut Option<Option<usize>>, font: usize, t: &cadcraft_render::PlotText, map: &Map) {
+/// glyph with a text matrix (font size 1: the matrix axes are one em) - unless it continues
+/// `last_run` (the same source entity, font and em-axes as the glyph just written), in which case
+/// it is placed with `Td` instead, a relative move from the previous glyph's own text-space
+/// origin. A PDF reader (Illustrator among them) treats a `Tm`-per-glyph sequence as that many
+/// separate one-character text objects; chaining same-run glyphs with `Td` keeps them one
+/// continuous text object per line (or per wrapped MTEXT paragraph), matching how real text PDFs
+/// are normally written.
+fn glyph(
+    c: &mut String,
+    text_font: &mut Option<Option<usize>>,
+    last_run: &mut Option<TextRun>,
+    font: usize,
+    handle: Handle,
+    t: &cadcraft_render::PlotText,
+    map: &Map,
+) {
     if text_font.is_none() {
         c.push_str("BT\n");
         *text_font = Some(None);
+        *last_run = None;
     }
     if *text_font != Some(Some(font)) {
         let _ = writeln!(c, "/F{font} 1 Tf");
         *text_font = Some(Some(font));
+        *last_run = None;
     }
     let s = map.s * map.k;
     let g = &t.glyph;
-    for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
-        num(c, v);
+    // Continuing the same entity's run only if the em-axes (rotation, height, width factor,
+    // obliquing) are unchanged - a straight `Td` move only means the right thing along a constant
+    // basis; anything else falls back to a fresh, always-correct `Tm`.
+    let run = last_run.filter(|r| r.handle == handle && r.gx.near(g.x, 1e-9) && r.gy.near(g.y, 1e-9));
+    let moved = run.and_then(|r| {
+        let det = g.x.x * g.y.y - g.y.x * g.x.y;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let d = g.origin - r.origin;
+        let dx = (d.x * g.y.y - g.y.x * d.y) / det;
+        let dy = (g.x.x * d.y - d.x * g.x.y) / det;
+        (dx.is_finite() && dy.is_finite()).then_some((dx, dy))
+    });
+    if let Some((dx, dy)) = moved {
+        num(c, dx);
         c.push(' ');
+        num(c, dy);
+        c.push_str(" Td\n");
+    } else {
+        for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
+            num(c, v);
+            c.push(' ');
+        }
+        pt(c, map.pt(g.origin));
+        c.push_str(" Tm\n");
     }
-    pt(c, map.pt(g.origin));
-    let _ = writeln!(c, " Tm <{:04X}> Tj", g.gid);
+    let _ = writeln!(c, "<{:04X}> Tj", g.gid);
+    *last_run = Some(TextRun { handle, gx: g.x, gy: g.y, origin: g.origin });
 }
 
 /// A PDF text string: a literal with `(`, `)` and `\` escaped when it is printable ASCII,

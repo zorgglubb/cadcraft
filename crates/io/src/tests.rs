@@ -486,6 +486,52 @@ fn pdf_model_fitted_to_sheet() {
 }
 
 #[test]
+fn pdf_text_chains_glyphs_of_one_run_with_td_instead_of_a_tm_each() {
+    // Real (embeddable) PDF text only happens for a TrueType style - the default "Standard"
+    // style's built-in stroke font draws strokes (`Kind::Polyline`), not glyph outlines, so this
+    // needs a style naming an installed TrueType font; skips cleanly when none of the common ones
+    // is installed, like `fonts::ttf_tests::system_font_outlines_when_available`.
+    let Some(font) =
+        ["DejaVuSans", "Arial", "Helvetica", "Verdana", "LiberationSans-Regular"].iter().find(|n| cadcraft_fonts::ttf::find(n).is_some())
+    else {
+        return;
+    };
+    let mut d = sample();
+    d.text_styles.push(TextStyle { name: "TTF".into(), font: (*font).into(), ..TextStyle::default() });
+    d.add(
+        &Space::Model,
+        Common::default(),
+        EntityKind::Text(Text {
+            insert: Vec3::new(1.0, 8.0, 0.0),
+            align_pt: None,
+            height: 0.3,
+            value: "Hello".into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "TTF".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        }),
+    )
+    .unwrap();
+
+    // A PDF reader (Illustrator among them) treats a `Tm`-per-glyph sequence as that many
+    // separate one-character text objects - "Hello" (one TEXT entity, several letters) used to
+    // write a fresh `Tm` for every glyph; it should now write one `Tm` for the first glyph of the
+    // run and a relative `Td` for the rest, so the whole word reads back as one text object.
+    let bytes = plot(&d, &Space::Model, &serde_json::json!({"paper": "A4", "compress": false})).unwrap();
+    let content = check_pdf(&bytes);
+    let tj = content.matches(" Tj\n").count();
+    let tm = content.matches(" Tm\n").count();
+    let td = content.matches(" Td\n").count();
+    assert!(tj >= 5, "expected at least one Tj per letter of \"Hello\": {content}");
+    assert_eq!(tj, tm + td, "every glyph placement is either a fresh Tm or a chained Td: {content}");
+    assert!(tm < tj, "multi-letter runs should chain with Td, not re-place every glyph with its own Tm: {content}");
+    assert!(td > 0, "{content}");
+}
+
+#[test]
 fn pdf_layout_one_to_one_with_viewport() {
     let mut d = sample();
     let paper = Space::Paper("Layout1".into());
