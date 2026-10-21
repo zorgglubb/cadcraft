@@ -103,41 +103,84 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 });
             });
             ui.separator();
-            egui::ScrollArea::both().max_height(300.0).show(ui, |ui| {
-                egui::Grid::new("cc_search_points_grid").striped(true).num_columns(8).show(ui, |ui| {
-                    ui.label(crate::tl!("Select"));
-                    ui.label(crate::tl!("Layer"));
-                    ui.label("MAT");
-                    ui.label("COD");
-                    ui.label("ALT");
-                    ui.label("X");
-                    ui.label("Y");
-                    ui.label("Z");
-                    ui.end_row();
-                    for row in st.rows.clone() {
+            // Resizable columns, with Z soaking up whatever width a window resize adds or
+            // removes - see the longer rationale on the equivalent table in
+            // `crate::tabledlg::search_dialog`.
+            use egui_extras::{Column, TableBuilder};
+            TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .max_scroll_height(300.0)
+                .column(Column::auto().at_least(24.0).resizable(false))
+                .column(Column::initial(100.0).at_least(50.0))
+                .column(Column::initial(90.0).at_least(40.0))
+                .column(Column::initial(90.0).at_least(40.0))
+                .column(Column::initial(80.0).at_least(40.0))
+                .column(Column::initial(90.0).at_least(40.0))
+                .column(Column::initial(90.0).at_least(40.0))
+                .column(Column::remainder().at_least(40.0).clip(true))
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.label(crate::tl!("Select"));
+                    });
+                    header.col(|ui| {
+                        ui.label(crate::tl!("Layer"));
+                    });
+                    header.col(|ui| {
+                        ui.label("MAT");
+                    });
+                    header.col(|ui| {
+                        ui.label("COD");
+                    });
+                    header.col(|ui| {
+                        ui.label("ALT");
+                    });
+                    header.col(|ui| {
+                        ui.label("X");
+                    });
+                    header.col(|ui| {
+                        ui.label("Y");
+                    });
+                    header.col(|ui| {
+                        ui.label("Z");
+                    });
+                })
+                .body(|body| {
+                    body.rows(22.0, st.rows.len(), |mut table_row| {
+                        let row = st.rows[table_row.index()].clone();
                         let mut checked = st.checked.contains(&row.handle);
-                        if ui.checkbox(&mut checked, "").changed() {
-                            if checked {
-                                st.checked.insert(row.handle);
-                            } else {
-                                st.checked.remove(&row.handle);
+                        table_row.col(|ui| {
+                            if ui.checkbox(&mut checked, "").changed() {
+                                if checked {
+                                    st.checked.insert(row.handle);
+                                } else {
+                                    st.checked.remove(&row.handle);
+                                }
+                                changed = true;
                             }
-                            changed = true;
-                        }
-                        ui.label(&row.layer);
+                        });
+                        table_row.col(|ui| {
+                            ui.label(&row.layer);
+                        });
                         for (tag, v) in [("MAT", &row.mat), ("COD", &row.cod), ("ALT", &row.alt)] {
-                            let id = ui.id().with(("cc_search_points_val", row.handle, tag));
-                            if let Some(nv) = crate::palettes::edit_field(ui, id, v.clone()) {
-                                edits.push((row.handle, tag, nv));
-                            }
+                            table_row.col(|ui| {
+                                let id = ui.id().with(("cc_search_points_val", row.handle, tag));
+                                if let Some(nv) = crate::palettes::edit_field(ui, id, v.clone()) {
+                                    edits.push((row.handle, tag, nv));
+                                }
+                            });
                         }
-                        ui.label(format!("{:.3}", row.x));
-                        ui.label(format!("{:.3}", row.y));
-                        ui.label(format!("{:.3}", row.z));
-                        ui.end_row();
-                    }
+                        table_row.col(|ui| {
+                            ui.label(format!("{:.3}", row.x));
+                        });
+                        table_row.col(|ui| {
+                            ui.label(format!("{:.3}", row.y));
+                        });
+                        table_row.col(|ui| {
+                            ui.label(format!("{:.3}", row.z));
+                        });
+                    });
                 });
-            });
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(crate::tf!("{n} point(s)", n = st.rows.len()));

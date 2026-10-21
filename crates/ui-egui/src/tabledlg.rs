@@ -466,31 +466,84 @@ pub fn search_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             });
         });
         ui.separator();
-        egui::ScrollArea::both().max_height(280.0).show(ui, |ui| {
-            egui::Grid::new("cc_search_grid").striped(true).num_columns(3 + fields.len().max(1)).show(ui, |ui| {
-                ui.label(crate::tl!("Select"));
-                ui.label(crate::tl!("Table"));
-                if st.table.is_empty() || fields.is_empty() {
+        // One table/field has been picked, so every row shares the same field set: a proper
+        // `TableBuilder` grid, with a drag handle between columns and the last one soaking up
+        // whatever width the window resize leaves over. "All tables" rows can each carry a
+        // different field set (one table's schema isn't another's), which `TableBuilder`'s fixed
+        // column list can't represent, so that case keeps the old free-form `Grid`.
+        if !st.table.is_empty() && !fields.is_empty() {
+            use egui_extras::{Column, TableBuilder};
+            let mut builder = TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .max_scroll_height(280.0)
+                .column(Column::auto().at_least(24.0).resizable(false))
+                .column(Column::initial(120.0).at_least(60.0));
+            for _ in 1..fields.len() {
+                builder = builder.column(Column::initial(120.0).at_least(40.0));
+            }
+            builder = builder.column(Column::remainder().at_least(40.0).clip(true));
+            builder
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.label(crate::tl!("Select"));
+                    });
+                    header.col(|ui| {
+                        ui.label(crate::tl!("Table"));
+                    });
+                    for name in &fields {
+                        header.col(|ui| {
+                            ui.label(name);
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(22.0, st.rows.len(), |mut table_row| {
+                        let row = st.rows[table_row.index()].clone();
+                        let mut checked = st.checked.contains(&row.handle);
+                        table_row.col(|ui| {
+                            if ui.checkbox(&mut checked, "").changed() {
+                                if checked {
+                                    st.checked.insert(row.handle);
+                                } else {
+                                    st.checked.remove(&row.handle);
+                                }
+                                changed = true;
+                            }
+                        });
+                        table_row.col(|ui| {
+                            ui.label(&row.table);
+                        });
+                        for name in &fields {
+                            table_row.col(|ui| {
+                                let v = row.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default();
+                                let id = ui.id().with(("cc_search_val", row.handle, name.as_str()));
+                                if let Some(nv) = crate::palettes::edit_field(ui, id, v) {
+                                    edits.push((row.handle, name.clone(), nv));
+                                }
+                            });
+                        }
+                    });
+                });
+        } else {
+            egui::ScrollArea::both().max_height(280.0).show(ui, |ui| {
+                egui::Grid::new("cc_search_grid").striped(true).num_columns(3 + fields.len().max(1)).show(ui, |ui| {
+                    ui.label(crate::tl!("Select"));
+                    ui.label(crate::tl!("Table"));
                     ui.label(crate::tl!("Field"));
                     ui.label(crate::tl!("Value"));
-                } else {
-                    for name in &fields {
-                        ui.label(name);
-                    }
-                }
-                ui.end_row();
-                for row in st.rows.clone() {
-                    let mut checked = st.checked.contains(&row.handle);
-                    if ui.checkbox(&mut checked, "").changed() {
-                        if checked {
-                            st.checked.insert(row.handle);
-                        } else {
-                            st.checked.remove(&row.handle);
+                    ui.end_row();
+                    for row in st.rows.clone() {
+                        let mut checked = st.checked.contains(&row.handle);
+                        if ui.checkbox(&mut checked, "").changed() {
+                            if checked {
+                                st.checked.insert(row.handle);
+                            } else {
+                                st.checked.remove(&row.handle);
+                            }
+                            changed = true;
                         }
-                        changed = true;
-                    }
-                    ui.label(&row.table);
-                    if st.table.is_empty() || fields.is_empty() {
+                        ui.label(&row.table);
                         for (k, v) in &row.fields {
                             ui.label(k);
                             let id = ui.id().with(("cc_search_val", row.handle, k.as_str()));
@@ -498,19 +551,11 @@ pub fn search_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                 edits.push((row.handle, k.clone(), nv));
                             }
                         }
-                    } else {
-                        for name in &fields {
-                            let v = row.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default();
-                            let id = ui.id().with(("cc_search_val", row.handle, name.as_str()));
-                            if let Some(nv) = crate::palettes::edit_field(ui, id, v) {
-                                edits.push((row.handle, name.clone(), nv));
-                            }
-                        }
+                        ui.end_row();
                     }
-                    ui.end_row();
-                }
+                });
             });
-        });
+        }
         ui.separator();
         ui.horizontal(|ui| {
             ui.label(crate::tf!("{n} row(s)", n = st.rows.len()));
@@ -600,5 +645,69 @@ mod tests {
         app.assign_table_dlg = Some(st);
         let r = app.run("data.assign_table", json!({ "name": "Parcelles", "handles": [handle.hex()] }));
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// `search_dialog` renders through two different grids depending on whether a table+field
+    /// is picked (the new `egui_extras::TableBuilder` path) or not (the free-form `egui::Grid`
+    /// path, kept for "all tables" since each table's rows carry a different field set). Both
+    /// must paint without panicking and show every row's values.
+    #[test]
+    fn search_dialog_with_a_table_chosen_renders_the_resizable_table() {
+        let mut app = app_with_table();
+        let h = app.session.execute("point", &json!({ "at": [0.0, 0.0] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+        let handle = cadcraft_doc::Handle::parse_hex(&h).unwrap();
+        app.run("data.assign_table", json!({ "name": "Parcelles", "handles": [handle.hex()] })).unwrap();
+        app.run("data.set_attribute", json!({ "handle": handle.hex(), "key": "Nom", "value": "Lot 12" })).unwrap();
+
+        open_search(&mut app);
+        let mut st = app.search_dlg.clone().unwrap();
+        st.table = "Parcelles".into();
+        app.search_dlg = Some(st.clone());
+        refresh_search(&mut app, &mut st);
+        app.search_dlg = Some(st);
+
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Lot 12"), "{found:?}");
+        assert!(found.iter().any(|t| t == "Nom"), "{found:?}");
+    }
+
+    #[test]
+    fn search_dialog_with_no_table_chosen_still_renders_every_row() {
+        let mut app = app_with_table();
+        let h = app.session.execute("point", &json!({ "at": [0.0, 0.0] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+        let handle = cadcraft_doc::Handle::parse_hex(&h).unwrap();
+        app.run("data.assign_table", json!({ "name": "Parcelles", "handles": [handle.hex()] })).unwrap();
+        app.run("data.set_attribute", json!({ "handle": handle.hex(), "key": "Nom", "value": "Lot 12" })).unwrap();
+
+        open_search(&mut app);
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Lot 12"), "{found:?}");
+    }
+
+    fn painted_text(app: CadApp) -> Vec<String> {
+        use egui::{Shape, vec2};
+        use egui_kittest::Harness;
+
+        fn texts(shape: &Shape, out: &mut Vec<String>) {
+            match shape {
+                Shape::Text(t) => out.push(t.galley.text().to_string()),
+                Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
+
+        let mut open = true;
+        let mut h = Harness::builder().with_size(vec2(900.0, 500.0)).build_ui_state(
+            |ui, app: &mut CadApp| {
+                search_dialog(app, ui.ctx(), &mut open);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            texts(&s.shape, &mut found);
+        }
+        found
     }
 }
