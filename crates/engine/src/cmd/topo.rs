@@ -114,6 +114,16 @@ pub fn specs() -> Vec<CommandSpec> {
                  → {vo, sigma, points: [{x, y, z, code}]}",
             )
             .noundo(),
+        CommandSpec::new("topo.search_points", "Search Points...", run_search_points)
+            .menu(&["Topo Calculations", "Search Points..."])
+            .params(
+                "{query?: string, field?: \"MAT\"|\"COD\"|\"ALT\", block?: string (default CADCRAFT_TCPOINT)} \
+             → {rows: [{handle, layer, mat, cod, alt, x, y, z}]}. Looks across every layer for block \
+             references named `block` (CADCRAFT_TCPOINT by default - every imported topo point is one), \
+             optionally keeping only the ones whose MAT/COD/ALT (or just `field`, if given) contains \
+             `query` (case-insensitively); with no `query`, every point. Capped at 5000 rows.",
+            )
+            .noundo(),
     ]
 }
 
@@ -185,6 +195,55 @@ fn run_parse_points_csv(_s: &mut Session, p: &Value) -> Result<Value> {
         })).collect::<Vec<_>>(),
         "skippedLines": import.skipped_lines,
     }))
+}
+
+/// Rows capped the same way `data.search` caps its own (large drawings, hostile input).
+const MAX_SEARCH_ROWS: usize = 5000;
+
+/// Data > Search... (`data.search`) only finds entities carrying a *user-defined* attribute
+/// table; TCPOINT's MAT/COD/ALT are plain block ATTRIB values instead, so this is its topo
+/// counterpart: every `block` reference (CADCRAFT_TCPOINT by default) on every layer, searched by
+/// those three fields and shown with layer + 3D position for a spreadsheet-like review.
+fn run_search_points(s: &mut Session, p: &Value) -> Result<Value> {
+    let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(TCPOINT_BLOCK);
+    let field = str_param(p, "field").map(str::to_ascii_uppercase);
+    let query = str_param(p, "query").unwrap_or_default().trim().to_ascii_lowercase();
+    let d = s.doc()?;
+    let mut rows = Vec::new();
+    // TCPOINT references always live in model space (nothing inserts one into a layout or
+    // another block), but a block definition's own entities are scanned too so a point copied
+    // into a block still turns up.
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    'entities: for store in stores {
+        for e in store.iter() {
+            let EntityKind::Insert(ins) = &e.kind else { continue };
+            if !ins.block.eq_ignore_ascii_case(block) {
+                continue;
+            }
+            let tag = |t: &str| ins.attribs.iter().find(|a| a.tag.eq_ignore_ascii_case(t)).map(|a| a.text.value.clone()).unwrap_or_default();
+            let (mat, cod, alt) = (tag("MAT"), tag("COD"), tag("ALT"));
+            let matches = query.is_empty()
+                || match field.as_deref() {
+                    Some("MAT") => mat.to_ascii_lowercase().contains(&query),
+                    Some("COD") => cod.to_ascii_lowercase().contains(&query),
+                    Some("ALT") => alt.to_ascii_lowercase().contains(&query),
+                    _ => [&mat, &cod, &alt].iter().any(|v| v.to_ascii_lowercase().contains(&query)),
+                };
+            if !matches {
+                continue;
+            }
+            rows.push(json!({
+                "handle": e.handle.hex(),
+                "layer": e.common.layer,
+                "mat": mat, "cod": cod, "alt": alt,
+                "x": ins.insert.x, "y": ins.insert.y, "z": ins.insert.z,
+            }));
+            if rows.len() >= MAX_SEARCH_ROWS {
+                break 'entities;
+            }
+        }
+    }
+    Ok(json!({ "rows": rows }))
 }
 
 pub(crate) fn vec3_req(cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
@@ -813,6 +872,53 @@ mod tests {
         assert_eq!(tag("MAT"), Some("P1".to_string()));
         assert_eq!(tag("COD"), Some("BORNE".to_string()));
         assert_eq!(tag("ALT"), Some("12.500".to_string()));
+    }
+
+    #[test]
+    fn search_points_finds_tcpoints_across_layers_filtered_by_any_field() {
+        let mut s = session_with_doc();
+        s.execute("layer.new", &json!({ "name": "BORNES" })).unwrap();
+        s.execute("layer.current", &json!({ "name": "BORNES" })).unwrap();
+        super::insert_tcpoint(
+            &mut s,
+            cadcraft_geom::Vec3::new(100.0, 200.0, 12.5),
+            Some("P1".into()),
+            Some("BORNE".into()),
+            true,
+            super::TCPOINT_BLOCK,
+            None,
+        )
+        .unwrap();
+        s.execute("layer.current", &json!({ "name": "0" })).unwrap();
+        super::insert_tcpoint(
+            &mut s,
+            cadcraft_geom::Vec3::new(50.0, 60.0, 3.0),
+            Some("P2".into()),
+            Some("REGARD".into()),
+            true,
+            super::TCPOINT_BLOCK,
+            None,
+        )
+        .unwrap();
+        // Not a TCPOINT - must never show up.
+        s.execute("circle", &json!({ "center": [0, 0], "radius": 1 })).unwrap();
+
+        let all = s.execute("topo.search_points", &json!({})).unwrap();
+        let rows = all["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2, "{rows:?}");
+
+        let by_cod = s.execute("topo.search_points", &json!({ "query": "borne" })).unwrap();
+        let rows = by_cod["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["mat"].as_str(), Some("P1"));
+        assert_eq!(rows[0]["layer"].as_str(), Some("BORNES"));
+        assert!((rows[0]["x"].as_f64().unwrap_or(f64::NAN) - 100.0).abs() < 1e-6);
+        assert!((rows[0]["z"].as_f64().unwrap_or(f64::NAN) - 0.0).abs() < 1e-6, "z is the geometric insertion point, not ALT: {rows:?}");
+        assert_eq!(rows[0]["alt"].as_str(), Some("12.500"));
+
+        // A `field` narrows which column `query` is matched against.
+        let by_mat_only = s.execute("topo.search_points", &json!({ "query": "borne", "field": "MAT" })).unwrap();
+        assert_eq!(by_mat_only["rows"].as_array().expect("rows").len(), 0, "BORNE is the code, not the matricule");
     }
 
     #[test]

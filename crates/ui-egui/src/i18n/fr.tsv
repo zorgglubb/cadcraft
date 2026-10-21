@@ -1176,6 +1176,8 @@
 	{n} entity(ies) selected	{n} entité(s) sélectionnée(s)
 	Table {table} assigned to {n} entity(ies)	Table {table} attribuée à {n} entité(s)
 	Search...	Recherche...
+	Search Points...	Rechercher des points...
+	{n} point(s)	{n} point(s)
 	Field	Champ
 	All tables	Toutes les tables
 	All fields	Tous les champs

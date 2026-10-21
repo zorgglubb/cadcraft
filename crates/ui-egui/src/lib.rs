@@ -30,6 +30,7 @@ pub mod hatchdlg;
 pub mod importgsidlg;
 pub mod importpointsdlg;
 mod mtext_editor;
+pub mod searchpointsdlg;
 pub mod spacemouse;
 pub mod stationdlg;
 pub mod tabledlg;
@@ -304,6 +305,8 @@ pub struct CadApp {
     pub cheminement_dlg: Option<cheminementdlg::State>,
     /// The Edit Altitudes dialog while open ([`editaltitudesdlg`]).
     pub edit_altitudes_dlg: Option<editaltitudesdlg::State>,
+    /// The Search Points... dialog while open ([`searchpointsdlg`]).
+    pub search_points_dlg: Option<searchpointsdlg::State>,
 }
 
 impl CadApp {
@@ -353,6 +356,7 @@ impl CadApp {
             free_station_dlg: None,
             cheminement_dlg: None,
             edit_altitudes_dlg: None,
+            search_points_dlg: None,
         }
     }
 

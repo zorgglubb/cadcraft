@@ -850,8 +850,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut set: Option<Value> = None;
     let mut custom_set: Option<Value> = None;
     let mut attrib_set: Vec<Value> = Vec::new();
-    let mut shp_attr_set: Option<Value> = None;
-    let mut data_attr_set: Option<Value> = None;
+    let mut shp_attr_set: Vec<Value> = Vec::new();
+    let mut data_attr_set: Vec<Value> = Vec::new();
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1163,32 +1163,46 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             _ => {}
         }
-        // A Shapefile-imported entity's DBF fields (any entity kind - `plan.import_shp` can tag
-        // a POINT/LWPOLYLINE either way), shown and editable the same way as any other property.
-        if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(&e, cadcraft_doc::import_attrs::SHP_APPID) {
-            group(ui, "Attributes");
-            prop_row(ui, "Table", |ui| read_only(ui, &table));
-            for (k, v) in &fields {
-                prop_row(ui, k, |ui| {
-                    if let Some(nv) = edit_field(ui, ui.id().with(("shpattr", e.handle, k)), v.clone()) {
-                        shp_attr_set = Some(json!({ "handle": e.handle.hex(), "key": k, "value": nv }));
-                    }
-                });
-            }
-        }
-        // An entity DATA.ASSIGN_TABLE attached a user-defined attribute table to.
-        if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(&e, cadcraft_doc::import_attrs::ATTR_TABLE_APPID) {
-            group(ui, "Attribute Table");
-            prop_row(ui, "Table", |ui| read_only(ui, &table));
-            for (k, v) in &fields {
-                prop_row(ui, k, |ui| {
-                    if let Some(nv) = edit_field(ui, ui.id().with(("datattr", e.handle, k)), v.clone()) {
-                        data_attr_set = Some(json!({ "handle": e.handle.hex(), "key": k, "value": nv }));
-                    }
-                });
-            }
-        }
     }
+    // A Shapefile-imported entity's DBF fields (`plan.import_shp` can tag a POINT/LWPOLYLINE
+    // either way) and an entity DATA.ASSIGN_TABLE attached a user-defined attribute table to -
+    // shown and editable the same way as Block Attributes above, for any entity kind and outside
+    // the Geometry gate above: several entities selected at once (a window of polylines all
+    // carrying the same table, say) show the fields they share, a differing value as *VARIES*,
+    // and a new value is written to every one of them that has that field.
+    let attr_group = |ui: &mut egui::Ui, title: &str, appid: &str, id_ns: &'static str, out: &mut Vec<Value>| {
+        let per: Vec<(String, Vec<(String, String)>)> =
+            sel.iter().filter_map(|h| d.entity(*h)).filter_map(|o| cadcraft_doc::import_attrs::fields(o, appid)).collect();
+        if per.is_empty() {
+            return;
+        }
+        let table = if per.iter().all(|(t, _)| t == &per[0].0) { per[0].0.clone() } else { "*VARIES*".into() };
+        let common: Vec<String> =
+            per[0].1.iter().map(|(k, _)| k.clone()).filter(|k| per.iter().all(|(_, f)| f.iter().any(|(fk, _)| fk == k))).collect();
+        if common.is_empty() {
+            return;
+        }
+        group(ui, title);
+        prop_row(ui, "Table", |ui| read_only(ui, &table));
+        for k in &common {
+            let vals: Vec<&String> = per.iter().filter_map(|(_, f)| f.iter().find(|(fk, _)| fk == k).map(|(_, v)| v)).collect();
+            let shown = if vals.iter().all(|v| *v == vals[0]) { vals[0].clone() } else { "*VARIES*".to_string() };
+            prop_row(ui, k, |ui| {
+                if let Some(nv) = edit_field(ui, ui.id().with((id_ns, &ids, k.as_str())), shown.clone()) {
+                    for h in &sel {
+                        if d.entity(*h)
+                            .and_then(|o| cadcraft_doc::import_attrs::fields(o, appid))
+                            .is_some_and(|(_, f)| f.iter().any(|(fk, _)| fk == k))
+                        {
+                            out.push(json!({ "handle": h.hex(), "key": k, "value": nv.clone() }));
+                        }
+                    }
+                }
+            });
+        }
+    };
+    attr_group(ui, "Attributes", cadcraft_doc::import_attrs::SHP_APPID, "shpattr", &mut shp_attr_set);
+    attr_group(ui, "Attribute Table", cadcraft_doc::import_attrs::ATTR_TABLE_APPID, "datattr", &mut data_attr_set);
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
     }
@@ -1199,10 +1213,10 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     for p in attrib_set {
         let _ = app.run("attedit", p);
     }
-    if let Some(p) = shp_attr_set {
+    for p in shp_attr_set {
         let _ = app.run("plan.set_shp_attribute", p);
     }
-    if let Some(p) = data_attr_set {
+    for p in data_attr_set {
         let _ = app.run("data.set_attribute", p);
     }
 }
@@ -1284,6 +1298,50 @@ mod tests {
             assert!(found.iter().any(|t| t == tag), "missing {tag} row: {found:?}");
         }
         // Differing values across the selection show as *VARIES*, not blank.
+        assert!(found.iter().any(|t| t == "*VARIES*"), "no *VARIES* marker: {found:?}");
+    }
+
+    /// A polyline carrying a user-defined attribute table ("ouverture", say) must still show its
+    /// "Attribute Table" group and fields when selected on its own.
+    #[test]
+    fn a_polyline_with_a_custom_attribute_table_shows_it_in_properties() {
+        let mut s = cadcraft_engine::Session::new();
+        s.execute("data.new_table", &json!({"name": "ouverture", "fields": [{"name": "LARGEUR", "kind": "decimal"}]})).unwrap();
+        let r = s.execute("pline", &json!({"points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
+        let h = cadcraft_doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        s.execute("select", &json!({"handles": [h.hex()]})).unwrap();
+        s.execute("data.assign_table", &json!({"name": "ouverture"})).unwrap();
+        s.execute("data.set_attribute", &json!({"handle": h.hex(), "key": "LARGEUR", "value": "0.9"})).unwrap();
+        let mut app = CadApp::new(s, crate::Services::default());
+        app.run("select", json!({"handles": [h.hex()]})).unwrap();
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Attribute Table"), "no Attribute Table group: {found:?}");
+        assert!(found.iter().any(|t| t == "ouverture"), "table name row missing: {found:?}");
+        assert!(found.iter().any(|t| t == "LARGEUR"), "field row missing: {found:?}");
+        assert!(found.iter().any(|t| t == "0.9"), "field value missing: {found:?}");
+    }
+
+    /// Several polylines carrying the same custom attribute table, selected together, must still
+    /// show the fields they share (previously this group only ever rendered for a single
+    /// selected entity) - a differing value across them shows *VARIES*, matching Block Attributes.
+    #[test]
+    fn several_polylines_with_the_same_attribute_table_show_their_common_fields() {
+        let mut s = cadcraft_engine::Session::new();
+        s.execute("data.new_table", &json!({"name": "ouverture", "fields": [{"name": "LARGEUR", "kind": "decimal"}]})).unwrap();
+        let r1 = s.execute("pline", &json!({"points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
+        let h1 = cadcraft_doc::Handle::parse_hex(r1["handle"].as_str().unwrap()).unwrap();
+        let r2 = s.execute("pline", &json!({"points": [[5, 0], [6, 0], [6, 1]]})).unwrap();
+        let h2 = cadcraft_doc::Handle::parse_hex(r2["handle"].as_str().unwrap()).unwrap();
+        s.execute("select", &json!({"handles": [h1.hex(), h2.hex()]})).unwrap();
+        s.execute("data.assign_table", &json!({"name": "ouverture"})).unwrap();
+        s.execute("data.set_attribute", &json!({"handle": h1.hex(), "key": "LARGEUR", "value": "0.9"})).unwrap();
+        s.execute("data.set_attribute", &json!({"handle": h2.hex(), "key": "LARGEUR", "value": "1.2"})).unwrap();
+        let mut app = CadApp::new(s, crate::Services::default());
+        app.run("select", json!({"handles": [h1.hex(), h2.hex()]})).unwrap();
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Attribute Table"), "no Attribute Table group: {found:?}");
+        assert!(found.iter().any(|t| t == "ouverture"));
+        assert!(found.iter().any(|t| t == "LARGEUR"));
         assert!(found.iter().any(|t| t == "*VARIES*"), "no *VARIES* marker: {found:?}");
     }
 }

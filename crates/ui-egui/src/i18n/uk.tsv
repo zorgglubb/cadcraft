@@ -1498,6 +1498,8 @@
 	{n} entity(ies) selected	Вибрано {n} об'єкт(ів)
 	Table {table} assigned to {n} entity(ies)	Таблицю {table} призначено {n} об'єкт(ам)
 	Search...	Пошук...
+	Search Points...	Пошук точок...
+	{n} point(s)	{n} точок(и)
 	Field	Поле
 	All tables	Усі таблиці
 	All fields	Усі поля
