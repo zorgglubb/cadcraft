@@ -18,7 +18,11 @@ struct LpmState {
     /// 0 = All, 1 = All Used Layers.
     filter: u8,
     search: String,
-    selected: Option<String>,
+    /// Layer names selected in the table (lower-cased), so bulk actions (visibility, color,
+    /// delete, ...) apply to all of them - a plain click replaces the set, Ctrl/Cmd-click toggles
+    /// one layer in or out, and Shift-click extends from `anchor` through the clicked row.
+    selected: std::collections::BTreeSet<String>,
+    anchor: Option<String>,
     /// (layer, buffer) while renaming.
     renaming: Option<(String, String)>,
     /// (layer, buffer) while editing the description.
@@ -254,15 +258,16 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     let name = format!("Layer{n}");
                     actions.push(("layer.new", json!({ "name": name })));
                     st.renaming = Some((name.clone(), name.clone()));
-                    st.selected = Some(name);
+                    st.selected = std::iter::once(name.to_ascii_lowercase()).collect();
+                    st.anchor = Some(name);
                 }
-                if icons::button(ui, Icon::Close, 24.0, "Delete Layer", false).clicked()
-                    && let Some(s) = &st.selected
-                {
-                    actions.push(("layer.delete", json!({ "name": s })));
+                if icons::button(ui, Icon::Close, 24.0, "Delete Layer", false).clicked() {
+                    for s in &st.selected {
+                        actions.push(("layer.delete", json!({ "name": s })));
+                    }
                 }
                 if icons::button(ui, Icon::MakeCurrent, 24.0, "Set Current", false).clicked()
-                    && let Some(s) = &st.selected
+                    && let Some(s) = st.selected.iter().next()
                 {
                     actions.push(("layer.current", json!({ "name": s })));
                 }
@@ -363,8 +368,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                     }
                                 }
                                 ui.end_row();
-                                for l in &shown {
-                                    row(ui, l, &cur, &used, vp.as_ref(), &linetypes, &library, &mut st, &mut actions);
+                                for (idx, l) in shown.iter().enumerate() {
+                                    row(ui, l, &cur, &used, vp.as_ref(), &linetypes, &library, &mut st, &mut actions, idx, &shown);
                                     ui.end_row();
                                 }
                             },
@@ -403,12 +408,18 @@ fn row(
     library: &[String],
     st: &mut LpmState,
     actions: &mut Vec<(&'static str, Value)>,
+    idx: usize,
+    shown: &[Layer],
 ) {
     let t = Tokens::get();
     let name = l.name.clone();
     let current = name.eq_ignore_ascii_case(cur);
     let is_used = used.contains(&name.to_ascii_lowercase());
-    let selected = st.selected.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(&name));
+    let lname = name.to_ascii_lowercase();
+    let selected = st.selected.contains(&lname);
+    // When this row is part of a multi-layer selection, a bulk action (visibility, color, ...)
+    // below applies to every selected layer, not just the one clicked - AutoCAD's own behaviour.
+    let targets: Vec<String> = if selected && st.selected.len() > 1 { st.selected.iter().cloned().collect() } else { vec![name.clone()] };
     // Status.
     let (sr, sresp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
     if selected {
@@ -436,7 +447,7 @@ fn row(
                 let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 if !cancel && buf.trim() != name && !buf.trim().is_empty() {
                     actions.push(("layer.set", json!({ "name": name, "newName": buf.trim() })));
-                    st.selected = Some(buf.trim().to_string());
+                    st.selected = std::iter::once(buf.trim().to_ascii_lowercase()).collect();
                 }
                 st.renaming = None;
             } else {
@@ -452,7 +463,20 @@ fn row(
             }
             ui.painter().text(pos2(nr.left() + 4.0, nr.center().y), egui::Align2::LEFT_CENTER, &name, crate::theme::body(), t.text);
             if r.clicked() {
-                st.selected = Some(name.clone());
+                let mods = ui.input(|i| i.modifiers);
+                if mods.shift && st.anchor.is_some() {
+                    let ai = shown.iter().position(|x| st.anchor.as_deref().is_some_and(|a| x.name.eq_ignore_ascii_case(a))).unwrap_or(idx);
+                    let (lo, hi) = (ai.min(idx), ai.max(idx));
+                    st.selected = shown[lo..=hi].iter().map(|x| x.name.to_ascii_lowercase()).collect();
+                } else if mods.command || mods.ctrl {
+                    if !st.selected.remove(&lname) {
+                        st.selected.insert(lname.clone());
+                    }
+                    st.anchor = Some(name.clone());
+                } else {
+                    st.selected = std::iter::once(lname.clone()).collect();
+                    st.anchor = Some(name.clone());
+                }
             }
             if r.double_clicked() && name != "0" && !name.eq_ignore_ascii_case("Defpoints") {
                 st.renaming = Some((name.clone(), name.clone()));
@@ -475,13 +499,19 @@ fn row(
     }
     // On / Freeze / Lock / Plot.
     if icons::button(ui, if l.on { Icon::Bulb } else { Icon::BulbOff }, 20.0, "On/Off", false).clicked() {
-        actions.push(("layer.set", json!({ "name": name, "on": !l.on })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "on": !l.on })));
+        }
     }
     if icons::button(ui, if l.frozen { Icon::Snowflake } else { Icon::Sun }, 20.0, "Freeze/Thaw in all viewports", false).clicked() {
-        actions.push(("layer.set", json!({ "name": name, "frozen": !l.frozen })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "frozen": !l.frozen })));
+        }
     }
     if icons::button(ui, if l.locked { Icon::Lock } else { Icon::Unlock }, 20.0, "Lock/Unlock", false).clicked() {
-        actions.push(("layer.set", json!({ "name": name, "locked": !l.locked })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "locked": !l.locked })));
+        }
     }
     let pr = icons::button(ui, Icon::Plot, 20.0, if l.plot { "Plot (click: do not plot)" } else { "Do not plot (click: plot)" }, false);
     if !l.plot {
@@ -489,11 +519,15 @@ fn row(
         ui.painter().line_segment([r.left_bottom(), r.right_top()], Stroke::new(1.6, Color32::from_rgb(0xe0, 0x50, 0x50)));
     }
     if pr.clicked() {
-        actions.push(("layer.set", json!({ "name": name, "plot": !l.plot })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "plot": !l.plot })));
+        }
     }
     // Color.
     if let Some(c) = color_button(ui, egui::Id::new(("lpm_color", &name)), l.color, false, 96.0) {
-        actions.push(("layer.set", json!({ "name": name, "color": c.name() })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "color": c.name() })));
+        }
     }
     // Linetype.
     let lt_resp = ui
@@ -526,7 +560,9 @@ fn row(
                 lt_sample(ui.painter(), Rect::from_min_size(pos2(r.left() + 4.0, r.top()), vec2(50.0, r.height())), Some(lt), t.text);
                 ui.painter().text(pos2(r.left() + 62.0, r.center().y), egui::Align2::LEFT_CENTER, &lt.name, crate::theme::body(), t.text);
                 if resp.on_hover_text(&lt.description).clicked() {
-                    actions.push(("layer.set", json!({ "name": name, "linetype": lt.name })));
+                    for n in &targets {
+                        actions.push(("layer.set", json!({ "name": n, "linetype": lt.name })));
+                    }
                     ui.close();
                 }
             }
@@ -537,7 +573,9 @@ fn row(
                         for n in library {
                             if ui.button(n).clicked() {
                                 actions.push(("linetype", json!({ "load": n })));
-                                actions.push(("layer.set", json!({ "name": name, "linetype": n })));
+                                for tn in &targets {
+                                    actions.push(("layer.set", json!({ "name": tn, "linetype": n })));
+                                }
                                 ui.close();
                             }
                         }
@@ -593,7 +631,9 @@ fn row(
                             Lineweight::Mm100(v) => json!(f64::from(v) / 100.0),
                             _ => json!("Default"),
                         };
-                        actions.push(("layer.set", json!({ "name": name, "lineweight": v })));
+                        for n in &targets {
+                            actions.push(("layer.set", json!({ "name": n, "lineweight": v.clone() })));
+                        }
                         ui.close();
                     }
                 }
@@ -607,7 +647,9 @@ fn row(
         ui.data_mut(|d| d.insert_temp(tid, tr));
     }
     if (r.drag_stopped() || r.lost_focus()) && tr != l.transparency {
-        actions.push(("layer.set", json!({ "name": name, "transparency": tr })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "transparency": tr })));
+        }
         ui.data_mut(|d| d.remove::<u8>(tid));
     } else if !r.dragged() && !r.has_focus() {
         ui.data_mut(|d| d.remove::<u8>(tid));
@@ -617,7 +659,7 @@ fn row(
         let vf = v.frozen_layers.iter().any(|f| f.eq_ignore_ascii_case(&name));
         if icons::button(ui, if vf { Icon::Snowflake } else { Icon::Sun }, 20.0, "Freeze/Thaw in the current viewport", false).clicked() {
             let key = if vf { "thaw" } else { "freeze" };
-            actions.push(("vplayer", json!({ "handle": h.hex(), key: [name] })));
+            actions.push(("vplayer", json!({ "handle": h.hex(), key: targets.clone() })));
         }
         let vc = v.layer_colors.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, c)| *c);
         ui.horizontal(|ui| {
@@ -637,7 +679,9 @@ fn row(
         ui.painter().rect_filled(Rect::from_min_size(r.right_bottom() - vec2(7.0, 7.0), vec2(6.0, 6.0)), 1.0, t.icon_accent);
     }
     if nvf.clicked() {
-        actions.push(("layer.set", json!({ "name": name, "newVpFreeze": !l.vp_freeze_new })));
+        for n in &targets {
+            actions.push(("layer.set", json!({ "name": n, "newVpFreeze": !l.vp_freeze_new })));
+        }
     }
     // Description (double-click to edit).
     match st.describing.clone() {
