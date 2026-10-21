@@ -843,9 +843,13 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
+    // Whether every selected entity is the same kind (Insert, Line, ...) - the Geometry section
+    // below only makes sense in bulk when they are, so a batch of block references can still get
+    // Rotation/Scale/Attributes while a mixed selection does not.
+    let same_kind = sel.iter().filter_map(|h| d.entity(*h)).all(|o| o.kind.type_name() == e.kind.type_name());
     let mut set: Option<Value> = None;
     let mut custom_set: Option<Value> = None;
-    let mut attrib_set: Option<Value> = None;
+    let mut attrib_set: Vec<Value> = Vec::new();
     let mut shp_attr_set: Option<Value> = None;
     let mut data_attr_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
@@ -948,7 +952,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             });
         });
     });
-    if sel.len() == 1 {
+    if sel.len() == 1 || (same_kind && matches!(e.kind, EntityKind::Insert(_))) {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");
         let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
@@ -1069,16 +1073,38 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
             }
             EntityKind::Insert(i) => {
+                // Several block references selected at once (same block type or not): only the
+                // fields below make sense in bulk - dynamic-block "Custom" properties are
+                // per-instance and stay single-selection only (further down).
+                let multi = ids.len() > 1;
+                let block_name = if multi {
+                    same(&|o| if let EntityKind::Insert(oi) = &o.kind { oi.block.clone() } else { String::new() })
+                } else {
+                    i.block.clone()
+                };
                 // A dynamic block reference shows its dynamic block's name, not its anonymous
                 // block's (`*U12`), and its custom properties below.
-                let custom = custom_properties(ui, app, e.handle);
-                let name = custom.as_ref().map_or_else(|| i.block.clone(), |(n, _)| n.clone());
+                let custom = if multi { None } else { custom_properties(ui, app, e.handle) };
+                let name = custom.as_ref().map_or(block_name, |(n, _)| n.clone());
                 prop_row(ui, "Name", |ui| read_only(ui, &name));
-                prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
-                prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
-                prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
-                num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
-                num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
+                if multi {
+                    let px = same(&|o| if let EntityKind::Insert(oi) = &o.kind { len(oi.insert.x) } else { String::new() });
+                    let py = same(&|o| if let EntityKind::Insert(oi) = &o.kind { len(oi.insert.y) } else { String::new() });
+                    let pz = same(&|o| if let EntityKind::Insert(oi) = &o.kind { len(oi.insert.z) } else { String::new() });
+                    prop_row(ui, "Position X", |ui| read_only(ui, &px));
+                    prop_row(ui, "Position Y", |ui| read_only(ui, &py));
+                    prop_row(ui, "Position Z", |ui| read_only(ui, &pz));
+                    let rot = same(&|o| if let EntityKind::Insert(oi) = &o.kind { real(oi.rotation.to_degrees()) } else { String::new() });
+                    let scl = same(&|o| if let EntityKind::Insert(oi) = &o.kind { real(oi.scale.x) } else { String::new() });
+                    num(ui, "Rotation", "rotation", rot, &mut set, &mut bad, &ids);
+                    num(ui, "Scale", "scale", scl, &mut set, &mut bad, &ids);
+                } else {
+                    prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
+                    prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
+                    prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
+                    num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                    num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
+                }
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
                     for p in &props {
@@ -1100,14 +1126,36 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 // Block ATTRIB instances (CODE/ALT/MAT on a CADCRAFT_TCPOINT survey point,
                 // or any other block's own attributes) - distinct from the dynamic-block
                 // "Custom" properties above, which come from constraints, not ATTDEF text.
-                if !i.attribs.is_empty() {
+                // With several block references selected, only the tags common to every one of
+                // them are shown, and an edit is applied to each reference that has that tag
+                // (AutoCAD-style batch fill); a differing value across the selection shows
+                // "*VARIES*" until a new value is typed.
+                let tags: Vec<String> = if multi {
+                    sel.iter()
+                        .filter_map(|h| d.entity(*h))
+                        .map(|o| match &o.kind {
+                            EntityKind::Insert(oi) => oi.attribs.iter().map(|a| a.tag.clone()).collect::<Vec<_>>(),
+                            _ => Vec::new(),
+                        })
+                        .reduce(|common, tags| common.into_iter().filter(|t| tags.contains(t)).collect())
+                        .unwrap_or_default()
+                } else {
+                    i.attribs.iter().map(|a| a.tag.clone()).collect()
+                };
+                if !tags.is_empty() {
                     group(ui, "Block Attributes");
-                    for a in &i.attribs {
-                        prop_row(ui, &a.tag, |ui| {
-                            if let Some(v) = edit_field(ui, ui.id().with(("attrib", e.handle, &a.tag)), a.text.value.clone()) {
-                                let mut values = serde_json::Map::new();
-                                values.insert(a.tag.clone(), Value::String(v));
-                                attrib_set = Some(json!({ "handle": e.handle.hex(), "values": Value::Object(values) }));
+                    for tag in &tags {
+                        let val = same(&|o| match &o.kind {
+                            EntityKind::Insert(oi) => oi.attribs.iter().find(|a| a.tag == *tag).map(|a| a.text.value.clone()).unwrap_or_default(),
+                            _ => String::new(),
+                        });
+                        prop_row(ui, tag, |ui| {
+                            if let Some(v) = edit_field(ui, ui.id().with(("attrib", &ids, tag)), val.clone()) {
+                                for id in &ids {
+                                    let mut values = serde_json::Map::new();
+                                    values.insert(tag.clone(), Value::String(v.clone()));
+                                    attrib_set.push(json!({ "handle": id, "values": Value::Object(values) }));
+                                }
                             }
                         });
                     }
@@ -1148,7 +1196,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
     }
-    if let Some(p) = attrib_set {
+    for p in attrib_set {
         let _ = app.run("attedit", p);
     }
     if let Some(p) = shp_attr_set {

@@ -1510,6 +1510,7 @@
 	Space	Пробіл
 	Tab	Табуляція
 	Show code label	Показувати підпис коду
+	current layer	поточний шар
 	Imported {n} point(s)	Імпортовано {n} точок(и)
 	Preview Points CSV/TXT	Попередній перегляд точок CSV/TXT
 	Add observation	Додати спостереження

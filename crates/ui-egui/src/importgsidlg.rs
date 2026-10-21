@@ -61,6 +61,9 @@ pub struct State {
     label: bool,
     /// The last "Compute" run's VO/σ, shown once coordinates have been previewed.
     last_vo: Option<(f64, Option<f64>)>,
+    /// The layer to import into - empty keeps `topo.import_gsi`'s own default (the current
+    /// layer); a name typed or picked here is created if it doesn't exist yet.
+    layer: String,
 }
 
 fn opt_num(v: &Value, key: &str) -> Option<f64> {
@@ -83,6 +86,7 @@ impl State {
             ref_matched: 0,
             label: true,
             last_vo: None,
+            layer: String::new(),
         }
     }
 }
@@ -159,6 +163,9 @@ fn run_import(app: &mut CadApp, st: &State) {
     let mut params = serde_json::Map::new();
     params.insert("path".into(), json!(st.path));
     params.insert("label".into(), json!(st.label));
+    if !st.layer.trim().is_empty() {
+        params.insert("layer".into(), json!(st.layer.trim()));
+    }
     if st.needs_station {
         let Some(x) = num(&st.station_x) else { return };
         let Some(y) = num(&st.station_y) else { return };
@@ -305,6 +312,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
     let (mut import, mut close, mut pick_refs, mut delimiter_changed, mut compute, mut export) = (false, false, false, false, false, false);
     let mut row_action: Option<(usize, Role)> = None;
+    let existing_layers: Vec<String> = app.session.doc().map(|d| d.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();
     egui::Window::new(crate::tl!("Import GSI Carnet")).open(open).resizable(true).collapsible(false).default_size(vec2(640.0, 560.0)).show(
         ctx,
         |ui| {
@@ -424,7 +432,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     });
                 }
             });
-            ui.checkbox(&mut st.label, crate::tl!("Show code label"));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut st.label, crate::tl!("Show code label"));
+                ui.label(crate::tl!("Layer"));
+                ui.add(egui::TextEdit::singleline(&mut st.layer).desired_width(140.0).hint_text(crate::tl!("current layer")));
+                egui::ComboBox::from_id_salt("gsi_layer_pick").width(24.0).selected_text("▾").show_ui(ui, |ui| {
+                    for l in &existing_layers {
+                        if ui.selectable_label(*l == st.layer, l).clicked() {
+                            st.layer = l.clone();
+                        }
+                    }
+                });
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 let reason = blocked_reason(&st);
