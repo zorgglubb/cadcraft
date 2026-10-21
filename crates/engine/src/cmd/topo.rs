@@ -117,11 +117,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("topo.search_points", "Search Points...", run_search_points)
             .menu(&["Topo Calculations", "Search Points..."])
             .params(
-                "{query?: string, field?: \"MAT\"|\"COD\"|\"ALT\", block?: string (default CADCRAFT_TCPOINT)} \
-             → {rows: [{handle, layer, mat, cod, alt, x, y, z}]}. Looks across every layer for block \
-             references named `block` (CADCRAFT_TCPOINT by default - every imported topo point is one), \
-             optionally keeping only the ones whose MAT/COD/ALT (or just `field`, if given) contains \
-             `query` (case-insensitively); with no `query`, every point. Capped at 5000 rows.",
+                "{query?: string, field?: \"MAT\"|\"COD\"|\"ALT\", block?: string} \
+             → {rows: [{handle, layer, mat, cod, alt, x, y, z}]}. Looks across every layer for every block \
+             reference carrying at least one of MAT/COD/ALT (any block name - CADCRAFT_TCPOINT, a custom \
+             name from `topo.import_points`'s own `block` param, a point symbol, ...), or only references \
+             named `block` if given, optionally keeping only the ones whose MAT/COD/ALT (or just `field`, \
+             if given) contains `query` (case-insensitively); with no `query`, every point. Capped at \
+             5000 rows.",
             )
             .noundo(),
     ]
@@ -205,7 +207,13 @@ const MAX_SEARCH_ROWS: usize = 5000;
 /// counterpart: every `block` reference (CADCRAFT_TCPOINT by default) on every layer, searched by
 /// those three fields and shown with layer + 3D position for a spreadsheet-like review.
 fn run_search_points(s: &mut Session, p: &Value) -> Result<Value> {
-    let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(TCPOINT_BLOCK);
+    // `block` narrows to one block name, matched case-insensitively (handy to split a mixed
+    // drawing); left out, every INSERT carrying at least one of MAT/COD/ALT counts as a topo
+    // point, whatever its block is actually called - `topo.import_points`/`topo.import_gsi`'s own
+    // `block` parameter, a point symbol (`topo.insert_symbol`), or a block authored by hand can
+    // all use a name other than CADCRAFT_TCPOINT, and requiring the default name here would show
+    // nothing for any of them.
+    let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty());
     let field = str_param(p, "field").map(str::to_ascii_uppercase);
     let query = str_param(p, "query").unwrap_or_default().trim().to_ascii_lowercase();
     let d = s.doc()?;
@@ -217,11 +225,14 @@ fn run_search_points(s: &mut Session, p: &Value) -> Result<Value> {
     'entities: for store in stores {
         for e in store.iter() {
             let EntityKind::Insert(ins) = &e.kind else { continue };
-            if !ins.block.eq_ignore_ascii_case(block) {
+            if block.is_some_and(|b| !ins.block.eq_ignore_ascii_case(b)) {
                 continue;
             }
             let tag = |t: &str| ins.attribs.iter().find(|a| a.tag.eq_ignore_ascii_case(t)).map(|a| a.text.value.clone()).unwrap_or_default();
             let (mat, cod, alt) = (tag("MAT"), tag("COD"), tag("ALT"));
+            if block.is_none() && !ins.attribs.iter().any(|a| matches!(a.tag.to_ascii_uppercase().as_str(), "MAT" | "COD" | "ALT")) {
+                continue;
+            }
             let matches = query.is_empty()
                 || match field.as_deref() {
                     Some("MAT") => mat.to_ascii_lowercase().contains(&query),

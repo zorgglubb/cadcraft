@@ -1,7 +1,9 @@
 //! Topo ▸ Search Points...: `topo.search_points` opened with no parameters - a spreadsheet-like
-//! lookup across every CADCRAFT_TCPOINT reference in the drawing (any layer, any block), by its
-//! MAT/COD/ALT attributes. Mirrors [`crate::tabledlg::search_dialog`] (Data ▸ Search...), which
-//! only covers user-defined attribute tables and never sees a topo point's own block attributes.
+//! lookup across every block reference carrying MAT/COD/ALT attributes anywhere in the drawing
+//! (any layer, any block name - CADCRAFT_TCPOINT by default, but a custom name from
+//! `topo.import_points`'s own `block` parameter or a point symbol counts too). Mirrors
+//! [`crate::tabledlg::search_dialog`] (Data ▸ Search...), which only covers user-defined attribute
+//! tables and never sees a topo point's own block attributes.
 
 use egui::vec2;
 use serde_json::{Value, json};
@@ -178,7 +180,13 @@ mod tests {
     fn with_two_points() -> CadApp {
         let mut s = Session::new();
         s.execute("new", &json!({})).unwrap();
-        let path = |n: &str| std::env::temp_dir().join(format!("cadcraft-search-points-{n}-{}.csv", std::process::id()));
+        // `std::process::id()` alone collides between tests running concurrently as separate
+        // threads of the same test binary (same pid); a thread-local counter on top keeps every
+        // call's paths unique even when `with_two_points` runs on two threads at once.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = |n: &str| std::env::temp_dir().join(format!("cadcraft-search-points-{n}-{}-{unique}.csv", std::process::id()));
         let (p1, p2) = (path("a"), path("b"));
         std::fs::write(&p1, "ID;X;Y;Z;CODE\nP1;10.0;20.0;5.0;BORNE\n").unwrap();
         std::fs::write(&p2, "ID;X;Y;Z;CODE\nP2;30.0;40.0;6.0;REGARD\n").unwrap();
