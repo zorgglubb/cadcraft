@@ -1206,3 +1206,84 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.run("data.set_attribute", p);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Shape, vec2};
+    use egui_kittest::Harness;
+
+    /// Painted texts: the full source text and whether it's a plain label ("tag — value" rows
+    /// share one `Shape::Text` per side, so collecting both halves is enough to see them).
+    fn texts(shape: &Shape, out: &mut Vec<String>) {
+        match shape {
+            Shape::Text(t) => out.push(t.galley.text().to_string()),
+            Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+
+    fn painted_text(app: CadApp) -> Vec<String> {
+        let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            |ui, app: &mut CadApp| {
+                properties_section(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            texts(&s.shape, &mut found);
+        }
+        found
+    }
+
+    /// Block B with attribute definitions MAT/ALT/COD and one reference carrying values.
+    fn drawing_with_attribs() -> (cadcraft_engine::Session, cadcraft_doc::Handle) {
+        let mut s = cadcraft_engine::Session::new();
+        for (tag, y) in [("MAT", 0.0), ("ALT", 1.0), ("COD", 2.0)] {
+            s.execute("attdef", &json!({"tag": tag, "prompt": tag, "default": "", "at": [0, y], "height": 0.2})).unwrap();
+        }
+        let hs: Vec<String> = s.doc().unwrap().model.iter().map(|e| e.handle.hex()).collect();
+        s.execute("block", &json!({"name": "SURVEY", "base": [0, 0], "handles": hs, "keep": "delete"})).unwrap();
+        let r = s.execute("insert", &json!({"name": "SURVEY", "at": [0, 0], "attribs": {"MAT": "A1", "ALT": "120.5", "COD": "BORNE"}})).unwrap();
+        let h = cadcraft_doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        (s, h)
+    }
+
+    /// Issue report: a single selected block reference's ATTDEF-backed attributes (MAT/ALT/COD,
+    /// as on a TCPOINT survey point) must still show as "Block Attributes" rows in Properties.
+    #[test]
+    fn a_single_block_references_attributes_still_show_in_properties() {
+        let (s, h) = drawing_with_attribs();
+        let mut app = CadApp::new(s, crate::Services::default());
+        app.run("select", json!({"handles": [h.hex()]})).unwrap();
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Block Attributes"), "no Block Attributes group: {found:?}");
+        for tag in ["MAT", "ALT", "COD"] {
+            assert!(found.iter().any(|t| t == tag), "missing {tag} row: {found:?}");
+        }
+        assert!(found.iter().any(|t| t == "A1"));
+        assert!(found.iter().any(|t| t == "120.5"));
+        assert!(found.iter().any(|t| t == "BORNE"));
+    }
+
+    /// Selecting several references of the *same* block still shows the attributes they have in
+    /// common; selecting references whose attribute sets don't overlap at all shows none, which
+    /// is not a bug - but a single-entity selection is unaffected by that multi-select logic.
+    #[test]
+    fn several_references_of_the_same_block_show_their_common_attributes() {
+        let (mut s, h1) = drawing_with_attribs();
+        let r2 = s.execute("insert", &json!({"name": "SURVEY", "at": [5, 0], "attribs": {"MAT": "A2", "ALT": "121.0", "COD": "BORNE"}})).unwrap();
+        let h2 = cadcraft_doc::Handle::parse_hex(r2["handle"].as_str().unwrap()).unwrap();
+        let mut app = CadApp::new(s, crate::Services::default());
+        app.run("select", json!({"handles": [h1.hex(), h2.hex()]})).unwrap();
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "Block Attributes"), "no Block Attributes group: {found:?}");
+        for tag in ["MAT", "ALT", "COD"] {
+            assert!(found.iter().any(|t| t == tag), "missing {tag} row: {found:?}");
+        }
+        // Differing values across the selection show as *VARIES*, not blank.
+        assert!(found.iter().any(|t| t == "*VARIES*"), "no *VARIES* marker: {found:?}");
+    }
+}
