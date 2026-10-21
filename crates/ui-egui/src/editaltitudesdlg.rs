@@ -110,69 +110,74 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
     let (mut run, mut close) = (false, false);
     egui::Window::new(crate::tl!("Edit Altitudes")).open(open).resizable(true).collapsible(false).default_size(vec2(560.0, 520.0)).show(ctx, |ui| {
-        ui.label(crate::tl!("Points to take into account"));
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.radio_value(&mut st.selection, Selection::Blocks, crate::tl!("Point block name(s) + layer(s)"));
-                ui.radio_value(&mut st.selection, Selection::Manual, crate::tl!("Manual selection"));
-                ui.radio_value(&mut st.selection, Selection::All, crate::tl!("Every point in the drawing"));
-                ui.add_enabled_ui(false, |ui| {
-                    ui.radio_value(&mut st.selection, Selection::List, crate::tl!("Every point in the list"));
-                });
-            });
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.label(crate::tl!("Point block name(s)"));
-                string_list(ui, "cc_altitudes_blocks", &mut st.block_names);
-                ui.add_space(6.0);
-                ui.label(crate::tl!("Block insertion layer(s)"));
-                string_list(ui, "cc_altitudes_layers", &mut st.layers);
-                ui.add_enabled_ui(st.selection == Selection::Manual, |ui| {
-                    ui.checkbox(&mut st.use_filter_for_manual, crate::tl!("Use to filter the manual selection"));
-                });
-            });
-        });
-        if st.selection == Selection::Manual {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                crate::tl!("Manual selection isn't wired up in this dialog yet - pick \"Point block name(s) + layer(s)\" or \"Every point in the drawing\" instead."),
-            );
-        }
-        ui.separator();
-
-        ui.checkbox(&mut st.matricule_filter, crate::tl!("Filter by matricule"));
-        ui.add_enabled_ui(st.matricule_filter, |ui| {
+        // Everything above the OK/Cancel row scrolls on its own, so shrinking the window (it's
+        // resizable) clips the point-selection/matricule/operations groups rather than pushing
+        // the button row itself out of view or off the bottom of the window.
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(crate::tl!("Points to take into account"));
             ui.horizontal(|ui| {
-                ui.label(crate::tl!("First matricule"));
-                ui.text_edit_singleline(&mut st.matricule_first);
-                ui.label(crate::tl!("Last matricule"));
-                ui.text_edit_singleline(&mut st.matricule_last);
-            });
-        });
-        ui.separator();
-
-        ui.label(crate::tl!("Operations to perform"));
-        egui::Grid::new("cc_altitudes_ops").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.radio_value(&mut st.mode, Mode::Keep2D, crate::tl!("Set/keep points in 2D"));
-                ui.radio_value(&mut st.mode, Mode::Keep3D, crate::tl!("Set/keep points in 3D"));
-            });
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(crate::tl!("Altimetric constant"));
-                    ui.text_edit_singleline(&mut st.constant);
-                    ui.label("m");
+                ui.vertical(|ui| {
+                    ui.radio_value(&mut st.selection, Selection::Blocks, crate::tl!("Point block name(s) + layer(s)"));
+                    ui.radio_value(&mut st.selection, Selection::Manual, crate::tl!("Manual selection"));
+                    ui.radio_value(&mut st.selection, Selection::All, crate::tl!("Every point in the drawing"));
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.radio_value(&mut st.selection, Selection::List, crate::tl!("Every point in the list"));
+                    });
                 });
-                ui.horizontal(|ui| {
-                    ui.label(crate::tl!("New number of decimals"));
-                    egui::ComboBox::from_id_salt("cc_altitudes_decimals").selected_text(st.decimals.to_string()).show_ui(ui, |ui| {
-                        for d in 0..=6u32 {
-                            ui.selectable_value(&mut st.decimals, d, d.to_string());
-                        }
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.label(crate::tl!("Point block name(s)"));
+                    string_list(ui, "cc_altitudes_blocks", &mut st.block_names);
+                    ui.add_space(6.0);
+                    ui.label(crate::tl!("Block insertion layer(s)"));
+                    string_list(ui, "cc_altitudes_layers", &mut st.layers);
+                    ui.add_enabled_ui(st.selection == Selection::Manual, |ui| {
+                        ui.checkbox(&mut st.use_filter_for_manual, crate::tl!("Use to filter the manual selection"));
                     });
                 });
             });
-            ui.end_row();
+            if st.selection == Selection::Manual {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    crate::tl!("Manual selection isn't wired up in this dialog yet - pick \"Point block name(s) + layer(s)\" or \"Every point in the drawing\" instead."),
+                );
+            }
+            ui.separator();
+
+            ui.checkbox(&mut st.matricule_filter, crate::tl!("Filter by matricule"));
+            ui.add_enabled_ui(st.matricule_filter, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(crate::tl!("First matricule"));
+                    ui.text_edit_singleline(&mut st.matricule_first);
+                    ui.label(crate::tl!("Last matricule"));
+                    ui.text_edit_singleline(&mut st.matricule_last);
+                });
+            });
+            ui.separator();
+
+            ui.label(crate::tl!("Operations to perform"));
+            egui::Grid::new("cc_altitudes_ops").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.radio_value(&mut st.mode, Mode::Keep2D, crate::tl!("Set/keep points in 2D"));
+                    ui.radio_value(&mut st.mode, Mode::Keep3D, crate::tl!("Set/keep points in 3D"));
+                });
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(crate::tl!("Altimetric constant"));
+                        ui.text_edit_singleline(&mut st.constant);
+                        ui.label("m");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(crate::tl!("New number of decimals"));
+                        egui::ComboBox::from_id_salt("cc_altitudes_decimals").selected_text(st.decimals.to_string()).show_ui(ui, |ui| {
+                            for d in 0..=6u32 {
+                                ui.selectable_value(&mut st.decimals, d, d.to_string());
+                            }
+                        });
+                    });
+                });
+                ui.end_row();
+            });
         });
 
         ui.separator();
