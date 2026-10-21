@@ -10,6 +10,7 @@ use cadcraft_doc::{Attrib, Block, Entity, EntityKind, HAlign, Handle, Insert, Te
 use cadcraft_geom::{Mat3, Vec2, Vec3};
 use serde_json::{Value, json};
 
+use super::draw::justify;
 use super::helpers::v3;
 use super::machines::{SelOutcome, SelectPhase, number};
 use super::*;
@@ -40,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("attdef", "Define Attributes...", run_attdef)
             .menu(&["Draw", "Block", "Define Attributes..."])
             .alias(&["att", "-attdef"])
-            .params("{tag, prompt?, default?, at, height?, invisible?}")
+            .params("{tag, prompt?, default?, at, height?, invisible?, justify?: L/C/R/A/M/F/TL/TC/TR/ML/MC/MR/BL/BC/BR (default L; `at` is always the anchor, so e.g. R lays the text out to its left)}")
             .interactive(|_| Ok(Box::new(AttdefM::default()))),
         attedit::attedit_spec(),
         attedit::dash_attedit_spec(),
@@ -261,21 +262,23 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() })))
 }
 
-fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, height: f64, invisible: bool) -> EntityKind {
+fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, height: f64, invisible: bool, j: (HAlign, VAlign)) -> EntityKind {
     let style = s.doc().map(|d| d.header.str("TEXTSTYLE", "Standard")).unwrap_or_else(|_| "Standard".into());
+    let (halign, valign) = j;
+    let left = halign == HAlign::Left && valign == VAlign::Baseline;
     EntityKind::AttDef(Attrib {
         tag: tag.to_ascii_uppercase(),
         text: Text {
             insert: v3(at),
-            align_pt: None,
+            align_pt: if left { None } else { Some(v3(at)) },
             height,
             value: default.into(),
             rotation: 0.0,
             width_factor: 1.0,
             oblique: 0.0,
             style,
-            halign: HAlign::Left,
-            valign: VAlign::Baseline,
+            halign,
+            valign,
         },
         invisible,
         constant: false,
@@ -293,7 +296,12 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let at = point_req("attdef", p, "at")?;
     let h = f64_or(p, "height", s.doc()?.header.f64("TEXTSIZE", 0.2));
-    let k = attdef_kind(s, tag, str_param(p, "prompt").unwrap_or(tag), str_param(p, "default").unwrap_or(""), at, h, bool_or(p, "invisible", false));
+    // The anchor point (`at`) stays where it's given regardless of justification: for anything
+    // but Left/Baseline, the text body is laid out relative to it (e.g. Right shifts the text to
+    // the left of the anchor, as a right-aligned label does).
+    let j = str_param(p, "justify").and_then(justify).unwrap_or((HAlign::Left, VAlign::Baseline));
+    let k =
+        attdef_kind(s, tag, str_param(p, "prompt").unwrap_or(tag), str_param(p, "default").unwrap_or(""), at, h, bool_or(p, "invisible", false), j);
     Ok(json!({ "handle": s.add_entity(k)?.hex() }))
 }
 
@@ -831,7 +839,7 @@ impl Interactive for AttdefM {
             (Some(tag), Some(pr), Some(def)) => {
                 if let Input::Point(p) = i {
                     let h = s.doc()?.header.f64("TEXTSIZE", 0.2);
-                    let k = attdef_kind(s, tag, pr, def, p, h, false);
+                    let k = attdef_kind(s, tag, pr, def, p, h, false, (HAlign::Left, VAlign::Baseline));
                     s.add_entity(k)?;
                     return Ok(Step::Done);
                 }
