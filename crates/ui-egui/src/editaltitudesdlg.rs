@@ -158,6 +158,11 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.label(crate::tl!("Operations to perform"));
             egui::Grid::new("cc_altitudes_ops").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.vertical(|ui| {
+                    // Without a floor, shrinking the (resizable) window narrows this grid column
+                    // past the radio labels' natural width, and egui wraps them one letter per
+                    // line instead of leaving the text be - a floor wide enough for the longer
+                    // label keeps it on one line at any window size.
+                    ui.set_min_width(190.0);
                     ui.radio_value(&mut st.mode, Mode::Keep2D, crate::tl!("Set/keep points in 2D"));
                     ui.radio_value(&mut st.mode, Mode::Keep3D, crate::tl!("Set/keep points in 3D"));
                 });
@@ -286,5 +291,46 @@ mod tests {
 
         let r = app.run("topo.edit_altitudes", json!({ "selection": "all", "mode": "3d", "constant": 2.0, "decimals": 2 }));
         assert_eq!(r.unwrap()["updated"].as_u64(), Some(1));
+    }
+
+    /// Reproduces the reported layout bug: shrinking the (resizable) window narrowed the mode
+    /// radios' grid column past their label's width, and egui wrapped "Set/keep points in 2D"
+    /// one letter per line instead of leaving it on one line. `set_min_width` on that column
+    /// should keep each label as a single `Shape::Text`, and the OK/Cancel row should still be
+    /// reachable (not scrolled away with the rest of the content).
+    #[test]
+    fn mode_labels_and_buttons_stay_readable_in_a_narrow_window() {
+        use egui::{Shape, vec2};
+        use egui_kittest::Harness;
+
+        fn texts(shape: &Shape, out: &mut Vec<String>) {
+            match shape {
+                Shape::Text(t) => out.push(t.galley.text().to_string()),
+                Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
+
+        let mut app = app_with_doc();
+        open(&mut app);
+        let mut open_flag = true;
+        // Narrower than the dialog's natural content width (560x520 default), the way the
+        // user's own manual resize was, but plenty tall - this isolates the horizontal squeeze
+        // from any vertical one.
+        let mut h = Harness::builder().with_size(vec2(450.0, 700.0)).build_ui_state(
+            |ui, app: &mut CadApp| {
+                dialog(app, ui.ctx(), &mut open_flag);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            texts(&s.shape, &mut found);
+        }
+        assert!(found.iter().any(|t| t == "Set/keep points in 2D"), "label wrapped: {found:?}");
+        assert!(found.iter().any(|t| t == "Set/keep points in 3D"), "label wrapped: {found:?}");
+        assert!(found.iter().any(|t| t == "OK"), "OK button not rendered: {found:?}");
+        assert!(found.iter().any(|t| t == "Cancel"), "Cancel button not rendered: {found:?}");
     }
 }
