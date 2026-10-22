@@ -2197,6 +2197,49 @@ fn kept_xrecord_application_group_roundtrips_as_read() {
     assert!(!out.contains("291\n2"), "no handle may be written under a bool code");
 }
 
+#[test]
+fn a_polylines_custom_attribute_table_survives_a_dxf_round_trip() {
+    let mut d = Drawing::new_imperial();
+    let h = d
+        .add(
+            &Space::Model,
+            Common::default(),
+            EntityKind::LwPolyline(LwPolyline {
+                vertices: vec![PolyVertex::new(Vec2::ZERO), PolyVertex::new(Vec2::new(4.0, 0.0)), PolyVertex::new(Vec2::new(4.0, 3.0))],
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            }),
+        )
+        .unwrap();
+    d.model.modify(h, |e| {
+        e.common.xdata = cadcraft_doc::import_attrs::tag_fields(
+            cadcraft_doc::import_attrs::ATTR_TABLE_APPID,
+            "Ouverture",
+            &[("Largeur".to_string(), "0.90".to_string())],
+        );
+    });
+
+    let out = write_dxf(&d);
+    let d2 = read_dxf(out.as_bytes()).expect("read back");
+    let e2 = d2.model.iter().find(|e| matches!(e.kind, EntityKind::LwPolyline(_))).expect("polyline kept");
+    let (table, fields) = cadcraft_doc::import_attrs::fields(e2, cadcraft_doc::import_attrs::ATTR_TABLE_APPID)
+        .expect("custom attribute table should survive a DXF round trip, same as it does for block ATTRIBs");
+    assert_eq!(table, "Ouverture");
+    assert_eq!(fields, vec![("Largeur".to_string(), "0.90".to_string())]);
+
+    // The reported bug is specifically about DWG: round-trip the same drawing through the real
+    // DWG bridge (acadrust) rather than plain DXF text.
+    let dwg = write(&d, "ouverture.dwg").expect("write dwg");
+    let d3 = read(&dwg, "ouverture.dwg").expect("read dwg");
+    let e3 = d3.model.iter().find(|e| matches!(e.kind, EntityKind::LwPolyline(_))).expect("polyline kept through dwg");
+    let (table3, fields3) = cadcraft_doc::import_attrs::fields(e3, cadcraft_doc::import_attrs::ATTR_TABLE_APPID)
+        .expect("custom attribute table should survive a DWG round trip too");
+    assert_eq!(table3, "Ouverture");
+    assert_eq!(fields3, vec![("Largeur".to_string(), "0.90".to_string())]);
+}
+
 // ---------- plot transparency ----------
 
 /// A black line under a red solid at `percent` transparency (drawn after it, so on top).

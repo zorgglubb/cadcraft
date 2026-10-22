@@ -1203,6 +1203,45 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     };
     attr_group(ui, "Attributes", cadcraft_doc::import_attrs::SHP_APPID, "shpattr", &mut shp_attr_set);
     attr_group(ui, "Attribute Table", cadcraft_doc::import_attrs::ATTR_TABLE_APPID, "datattr", &mut data_attr_set);
+    // A third-party application's own XDATA, kept verbatim on read (`dxf_raw::foreign_xdata`) so
+    // save writes it back, but otherwise unknown to CADCraft: on a DWG from survey/civil
+    // software (Covadis, Mensura, Civil 3D...) a polyline's own "attributes" are usually plain
+    // XDATA under that application's own id, not CADCraft's Attribute Table convention above (and
+    // not a block ATTRIB, which is why those keep showing while this data didn't). There's no
+    // schema to interpret it by, so this is a plain, read-only "group code: value" dump per
+    // application - at least a way to see that something is there, for one entity at a time.
+    if let [only] = sel.as_slice()
+        && let Some(e) = d.entity(*only)
+    {
+        let xd = &e.common.xdata;
+        let mut shown_header = false;
+        let mut i = 0;
+        while let Some(off) = xd.get(i..).and_then(|rest| rest.iter().position(|t| t.code == 1001)) {
+            let start = i + off;
+            let app = xd[start].value.clone();
+            let end = xd.get(start + 1..).and_then(|rest| rest.iter().position(|t| t.code == 1001)).map_or(xd.len(), |e2| start + 1 + e2);
+            let groups = xd.get(start + 1..end).unwrap_or_default();
+            i = end;
+            let shp = cadcraft_doc::import_attrs::SHP_APPID;
+            let tbl = cadcraft_doc::import_attrs::ATTR_TABLE_APPID;
+            if groups.is_empty() || app.eq_ignore_ascii_case(shp) || app.eq_ignore_ascii_case(tbl) {
+                continue;
+            }
+            if !shown_header {
+                group(ui, "External Data");
+                shown_header = true;
+            }
+            prop_row(ui, &app, |ui| {
+                let text: String = groups
+                    .iter()
+                    .take(50)
+                    .map(|t| format!("{}: {}", t.code, t.value.chars().take(80).collect::<String>()))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                read_only(ui, &text);
+            });
+        }
+    }
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
     }
@@ -1250,6 +1289,33 @@ mod tests {
             texts(&s.shape, &mut found);
         }
         found
+    }
+
+    /// A DWG/DXF file from another application (survey/civil software, say) can attach its own
+    /// XDATA to a polyline - unlike a Shapefile import or `data.assign_table`, CADCraft knows
+    /// nothing about that application's field schema, but it should still show that *something*
+    /// is there, read-only, rather than silently dropping it the way a plain Properties view
+    /// that only knows its own attribute-table convention would.
+    #[test]
+    fn a_polylines_foreign_xdata_shows_up_read_only() {
+        let mut s = cadcraft_engine::Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let r = s.execute("pline", &json!({"vertices": [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]], "closed": true})).unwrap();
+        let h = r["handle"].as_str().or_else(|| r["handles"][0].as_str()).unwrap().to_string();
+        let handle = cadcraft_doc::Handle::parse_hex(&h).unwrap();
+        s.doc_mut().unwrap().model.modify(handle, |e| {
+            e.common.xdata = vec![
+                cadcraft_doc::RawTag { code: 1001, value: "COVADIS".into() },
+                cadcraft_doc::RawTag { code: 1000, value: "OUVRAGE=Regard".into() },
+                cadcraft_doc::RawTag { code: 1070, value: "12".into() },
+            ];
+        });
+        s.execute("select", &json!({ "handles": [h] })).unwrap();
+        let app = CadApp::new(s, crate::Services::default());
+
+        let found = painted_text(app);
+        assert!(found.iter().any(|t| t == "COVADIS"), "{found:?}");
+        assert!(found.iter().any(|t| t.contains("OUVRAGE=Regard")), "{found:?}");
     }
 
     /// Block B with attribute definitions MAT/ALT/COD and one reference carrying values.
