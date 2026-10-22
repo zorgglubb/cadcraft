@@ -1412,7 +1412,7 @@
 	Topo	Топо
 	Triangulate	Тріангулювати
 	Triangulate (TIN)	Тріангулювати (TIN)
-	Create TIN...	Створити TIN...
+	Create MNT...	Створити MNT...
 	Zero Value	Нульове значення
 	Zero Value (VO)	Нульове значення (VO)
 	Add .VEC File…	Додати файл .VEC…
@@ -1561,3 +1561,24 @@
 	Points usable	Придатні точки
 	Skipped (null altitude)	Пропущено (нульова висота)
 	TIN created: {n} point(s), {t} triangle(s)	TIN створено: {n} точок(и), {t} трикутник(ів)
+	Create Contours...	Створити горизонталі...
+	Dimension Contours...	Кота горизонталей...
+	Erase the target layer(s) before drawing	Очистити цільовий(і) шар(и) перед малюванням
+	Contour orders (each its own step and layer)	Порядки горизонталей (крок і шар для кожного)
+	Step	Крок
+	Colour (ACI, optional)	Колір (ACI, необов'язково)
+	Add order	Додати порядок
+	Contours created for {n} order(s)	Горизонталі створено для {n} порядк(ів)
+	Contour layer(s) to label	Шар(и) горизонталей для підписування
+	Label placement	Розміщення підписів
+	Regular intervals along each contour	Через рівні інтервали вздовж кожної горизонталі
+	Interval	Інтервал
+	Where an axis crosses them	Там, де їх перетинає вісь
+	Axis point 1	Точка осі 1
+	Axis point 2	Точка осі 2
+	Label text	Текст підпису
+	Decimals	Десяткові знаки
+	Text height (blank: drawing default)	Висота тексту (порожньо: за замовчуванням)
+	Suffix (e.g. " m")	Суфікс (напр. " м")
+	Target layer	Цільовий шар
+	{n} elevation label(s) created	Створено підписів висот: {n}

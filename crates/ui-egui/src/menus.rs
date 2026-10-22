@@ -308,6 +308,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::createmntdlg::open(app);
             Ok(Value::Null)
         }
+        "terrain.create_contours" if params.is_null() && app.session.state().is_ok() => {
+            crate::createcontoursdlg::open(app);
+            Ok(Value::Null)
+        }
+        "terrain.dimension_contours" if params.is_null() && app.session.state().is_ok() => {
+            crate::dimensioncontoursdlg::open(app);
+            Ok(Value::Null)
+        }
         // One file at a time for now - EDIGEO parcels often span several `.VEC` files, but
         // there is no multi-select picker service yet (a further increment).
         "topo.import_edigeo" if no_path => {

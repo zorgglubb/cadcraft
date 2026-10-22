@@ -1090,7 +1090,7 @@
 	Topo	Topo
 	Triangulate	Trianguler
 	Triangulate (TIN)	Trianguler (TIN)
-	Create TIN...	Créer un TIN...
+	Create MNT...	Créer un MNT...
 	Zero Value	Valeur origine
 	Zero Value (VO)	Valeur origine (VO)
 	Add .VEC File…	Ajouter un fichier .VEC…
@@ -1240,3 +1240,24 @@
 	Points usable	Points utilisables
 	Skipped (null altitude)	Ignorés (altitude nulle)
 	TIN created: {n} point(s), {t} triangle(s)	TIN créé : {n} point(s), {t} triangle(s)
+	Create Contours...	Créer les courbes...
+	Dimension Contours...	Coter les courbes...
+	Target layer	Calque cible
+	Erase the target layer(s) before drawing	Effacer le(s) calque(s) cible(s) avant de dessiner
+	Contour orders (each its own step and layer)	Ordres de courbes (pas et calque pour chacun)
+	Step	Pas
+	Colour (ACI, optional)	Couleur (ACI, facultatif)
+	Add order	Ajouter un ordre
+	Contours created for {n} order(s)	Courbes créées pour {n} ordre(s)
+	Contour layer(s) to label	Calque(s) de courbes à coter
+	Label placement	Placement des cotes
+	Regular intervals along each contour	Intervalles réguliers le long de chaque courbe
+	Interval	Intervalle
+	Where an axis crosses them	Là où un axe les croise
+	Axis point 1	Point d'axe 1
+	Axis point 2	Point d'axe 2
+	Label text	Texte de cotation
+	Decimals	Décimales
+	Text height (blank: drawing default)	Hauteur du texte (vide : valeur par défaut)
+	Suffix (e.g. " m")	Suffixe (ex. " m")
+	{n} elevation label(s) created	{n} cote(s) d'altitude créée(s)

@@ -1,9 +1,10 @@
-//! Topo 3D ▸ Create TIN... (TERRAIN.CREATE_MNT) opened with no parameters: a small wizard over
+//! Topo 3D ▸ Create MNT... (TERRAIN.CREATE_MNT) opened with no parameters: a small wizard over
 //! that command, mirroring `topo.edit_altitudes`'s own point-source picker (block name(s) +
 //! layer(s), or a manual selection via the same `data.pick_entities` pick/resume flow) rather
 //! than inventing a second one, since both ultimately gather the same kind of topo points. What's
-//! specific to a MNT here is the altitude filter and the live "Estimate" preview before actually
-//! triangulating and drawing.
+//! specific to a MNT here is the altitude filter, the target layer the triangulation is drawn on
+//! (created and coloured green the first time it's used), and the live "Estimate" preview before
+//! actually triangulating and drawing.
 
 use egui::vec2;
 use serde_json::{Value, json};
@@ -31,13 +32,16 @@ pub struct State {
     pub block_names: Vec<String>,
     pub layers: Vec<String>,
     pub ignore_null_altitude: bool,
+    /// The layer the TIN's own triangulation edges are drawn on - created (and coloured green)
+    /// the first time it's used if it doesn't already exist.
+    pub target_layer: String,
     pub handles: Vec<cadcraft_doc::Handle>,
     picking: bool,
     pub estimate: Option<Estimate>,
 }
 
 pub fn open(app: &mut CadApp) {
-    app.create_mnt_dlg = Some(State { ignore_null_altitude: true, ..State::default() });
+    app.create_mnt_dlg = Some(State { ignore_null_altitude: true, target_layer: "MNT".into(), ..State::default() });
     app.ui.dialog = Some("createmnt".into());
 }
 
@@ -73,6 +77,7 @@ fn params(st: &State, draw: bool) -> Value {
     p.insert("blockNames".into(), json!(st.block_names));
     p.insert("layers".into(), json!(st.layers));
     p.insert("ignoreNullAltitude".into(), json!(st.ignore_null_altitude));
+    p.insert("layer".into(), json!(if st.target_layer.trim().is_empty() { "MNT" } else { st.target_layer.trim() }));
     p.insert("draw".into(), json!(draw));
     if st.selection == Selection::Manual {
         p.insert("handles".into(), json!(st.handles.iter().map(|h| h.hex()).collect::<Vec<_>>()));
@@ -100,7 +105,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut estimate = false;
     let mut run = false;
     let mut close = false;
-    egui::Window::new(crate::tl!("Create TIN...")).open(open).resizable(true).collapsible(false).default_size(vec2(520.0, 460.0)).show(ctx, |ui| {
+    egui::Window::new(crate::tl!("Create MNT...")).open(open).resizable(true).collapsible(false).default_size(vec2(520.0, 480.0)).show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(crate::tl!("Points to take into account"));
             ui.horizontal(|ui| {
@@ -127,6 +132,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.separator();
 
             ui.checkbox(&mut st.ignore_null_altitude, crate::tl!("Ignore points with a null altitude"));
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Target layer"));
+                ui.text_edit_singleline(&mut st.target_layer);
+            });
             ui.separator();
 
             if ui.button(crate::tl!("Estimate...")).clicked() {

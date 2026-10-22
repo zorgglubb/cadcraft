@@ -20,10 +20,12 @@ pub mod closing;
 pub mod cmdline;
 pub mod context_menu;
 pub mod control;
+pub mod createcontoursdlg;
 pub mod createmntdlg;
 pub mod credits;
 pub mod crsdlg;
 pub mod dialogs;
+pub mod dimensioncontoursdlg;
 pub mod docking;
 pub mod editaltitudesdlg;
 pub mod freestationdlg;
@@ -310,6 +312,10 @@ pub struct CadApp {
     pub search_points_dlg: Option<searchpointsdlg::State>,
     /// The Create TIN... (MNT) dialog while open ([`createmntdlg`]).
     pub create_mnt_dlg: Option<createmntdlg::State>,
+    /// The Create Contours... dialog while open ([`createcontoursdlg`]).
+    pub create_contours_dlg: Option<createcontoursdlg::State>,
+    /// The Dimension Contours... dialog while open ([`dimensioncontoursdlg`]).
+    pub dimension_contours_dlg: Option<dimensioncontoursdlg::State>,
 }
 
 impl CadApp {
@@ -361,6 +367,8 @@ impl CadApp {
             edit_altitudes_dlg: None,
             search_points_dlg: None,
             create_mnt_dlg: None,
+            create_contours_dlg: None,
+            dimension_contours_dlg: None,
         }
     }
 
@@ -657,6 +665,7 @@ impl CadApp {
         tabledlg::resume_remove(self);
         editaltitudesdlg::resume(self);
         createmntdlg::resume(self);
+        createcontoursdlg::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

@@ -1,20 +1,34 @@
 //! Terrain commands built on `cadcraft-terrain`: triangulating a point cloud into a TIN,
 //! querying its elevation at a point, and extracting contour-line segments - each as a stateless
 //! calculation over the points given in the call (no persistent terrain object yet), consistent
-//! with "programmatic calls never open dialogs". `terrain.create_mnt` is the one exception that
-//! reads the drawing itself: it gathers the points for `terrain.triangulate` from the active
-//! space instead of making the caller assemble `points` by hand, the way a MNT/TIN creation
-//! wizard needs to (object selection by block/layer or a manual pick, altitude filtering).
+//! with "programmatic calls never open dialogs". `terrain.create_mnt`, `terrain.create_contours`
+//! and `terrain.dimension_contours` are the exceptions that read the drawing itself: the first
+//! two gather their points for `triangulate`/`contours` from the active space instead of making
+//! the caller assemble `points` by hand, the way a MNT/TIN creation wizard needs to (object
+//! selection by block/layer or a manual pick, altitude filtering); the third reads back the
+//! `Line` entities a prior `terrain.create_contours` (or anything else) left on the chosen
+//! layers and labels them, since nothing here keeps the TIN itself around between calls.
+//!
+//! **Scope, stated plainly**: contour segments are extracted per-triangle (`cadcraft_terrain`'s
+//! `contours` function) and only chained into walkable polylines inside
+//! `terrain.dimension_contours` (for placing labels along them) - the drawing itself still gets
+//! one `LINE` per raw segment, not a single smoothed `LWPOLYLINE` per level. Smoothing/fitting is
+//! a later increment.
 
 use std::collections::HashSet;
 
-use cadcraft_doc::{EntityKind, Handle, Line};
-use cadcraft_geom::Vec3;
+use cadcraft_doc::{Common, EntityKind, HAlign, Handle, Line, Text, VAlign};
+use cadcraft_geom::{Line as GLine, Vec2, Vec3, line_line};
 use cadcraft_terrain::{TerrainError, contours, triangulate};
 use serde_json::{Value, json};
 
 use super::*;
 use crate::{Result, Session};
+
+/// The MNT's own triangulation edges land here by default - a layer CADCraft creates and colours
+/// green the first time it's needed, not copied from any reference application's convention.
+const DEFAULT_MNT_LAYER: &str = "MNT";
+const DEFAULT_CONTOUR_LABEL_LAYER: &str = "COTES_COURBES";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -28,14 +42,35 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Topo 3D", "TIN", "Contour Lines"])
             .alias(&["courbes"])
             .params("{points: [[x,y,z], ...], interval: number, draw?: bool}"),
-        CommandSpec::new("terrain.create_mnt", "Create TIN...", run_create_mnt).menu(&["Topo 3D", "TIN", "Create TIN..."]).params(
+        CommandSpec::new("terrain.create_mnt", "Create MNT...", run_create_mnt).menu(&["Topo 3D", "Create MNT..."]).params(
             "{selection: \"auto\"|\"manual\" (default \"auto\"), blockNames?: [string], layers?: [string] \
              (both narrow \"auto\"; empty/omitted means every point block and layer), \
              handles?: [string] (required for \"manual\"), ignoreNullAltitude?: bool (default true), \
+             layer?: string (default \"MNT\"; created and coloured green the first time it's used), \
              draw?: bool (default true)} → {pointCount, skippedNullAltitude, triangleCount, edgeCount, \
-             elevationRange}. Points come from every topo point block (any INSERT with an ALT attribute, \
-             at its insertion XY/ALT) and bare POINT entities (at their own XYZ) in the active space.",
+             elevationRange, layer}. Points come from every topo point block (any INSERT with an ALT \
+             attribute, at its insertion XY/ALT) and bare POINT entities (at their own XYZ) in the \
+             active space.",
         ),
+        CommandSpec::new("terrain.create_contours", "Create Contours...", run_create_contours).menu(&["Topo 3D", "Create Contours..."]).params(
+            "{selection, blockNames?, layers?, handles?, ignoreNullAltitude? (same as terrain.create_mnt), \
+             orders: [{step: number>0, layer: string, color?: 1..255}] (at least one; each order draws \
+             every contour level that's a multiple of its own `step` into its own `layer`, independently \
+             of the other orders), clearLayers?: bool (default true: erase what's already on an order's \
+             layer before drawing), draw?: bool (default true)} → {pointCount, elevationRange, \
+             orders: [{step, layer, levelCount, segmentCount}]}.",
+        ),
+        CommandSpec::new("terrain.dimension_contours", "Dimension Contours...", run_dimension_contours)
+            .menu(&["Topo 3D", "Dimension Contours..."])
+            .params(
+                "{layers: [string] (contour layers to label; required), mode: \"regular\"|\"axis\" (default \
+                 \"regular\"), interval?: number (world units between labels along a contour's length; \
+                 default 10, \"regular\" mode), axis?: {a: [x,y], b: [x,y]} (required for \"axis\" mode: \
+                 one label wherever this segment crosses a contour), decimals?: integer (default 2), \
+                 height?: number (default TEXTSIZE), suffix?: string (appended after the number, e.g. \
+                 \" m\"; default \"\"), layer?: string (default \"COTES_COURBES\"; created if missing), \
+                 draw?: bool (default true)} → {labelCount}.",
+            ),
     ]
 }
 
@@ -87,23 +122,55 @@ fn matches_names(name: &str, names: &[String]) -> bool {
     names.is_empty() || names.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
-fn run_create_mnt(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "terrain.create_mnt";
+/// Ensures `layer` exists (creating it coloured `default_color` if it doesn't - an existing
+/// layer's colour is left alone) and adds `kind` to the active space on it, everything else
+/// ByLayer so it follows that layer's own look.
+fn add_on_layer(s: &mut Session, layer: &str, default_color: cadcraft_color::Color, kind: EntityKind) -> Result<Handle> {
+    let space = s.space();
+    let d = s.doc_mut()?;
+    if d.ensure_layer(layer)
+        && let Some(l) = d.layer_mut(layer)
+    {
+        l.color = default_color;
+    }
+    let common = Common { layer: layer.to_string(), ..Common::default() };
+    Ok(d.add(&space, common, kind)?)
+}
+
+/// Every entity on `layer` in the active space, erased - `terrain.create_contours`' `clearLayers`
+/// re-running cleanly instead of piling up a new set of lines over the old one every time.
+fn clear_layer(s: &mut Session, layer: &str) -> Result<()> {
+    let space = s.space();
+    let handles: Vec<Handle> = s
+        .doc()?
+        .space(&space)
+        .map(|store| store.iter().filter(|e| e.common.layer.eq_ignore_ascii_case(layer)).map(|e| e.handle).collect())
+        .unwrap_or_default();
+    let d = s.doc_mut()?;
+    for h in handles {
+        d.remove_entity(h);
+    }
+    Ok(())
+}
+
+/// The points `terrain.create_mnt`/`terrain.create_contours` both triangulate from, gathered and
+/// filtered the same way (`selection`/`blockNames`/`layers`/`handles`/`ignoreNullAltitude`).
+/// Returns the usable points and how many were skipped for having no real altitude.
+fn select_points(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<Vec3>, usize)> {
     let selection = str_param(p, "selection").unwrap_or("auto");
     let block_names = names_param(p, "blockNames");
     let layers = names_param(p, "layers");
     let ignore_null = bool_or(p, "ignoreNullAltitude", true);
-    let draw = bool_or(p, "draw", true);
 
     let all = all_mnt_candidates(s)?;
     let mut chosen: Vec<Vec3> = match selection {
         "manual" => {
-            let hs = p.get("handles").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`handles` is required for `selection: \"manual\"`"))?;
+            let hs = p.get("handles").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`handles` is required for `selection: \"manual\"`"))?;
             let wanted: HashSet<Handle> = hs.iter().filter_map(Value::as_str).filter_map(Handle::parse_hex).collect();
             all.into_iter().filter(|c| wanted.contains(&c.handle)).map(|c| c.p).collect()
         }
         "auto" => all.into_iter().filter(|c| matches_names(&c.block, &block_names) && matches_names(&c.layer, &layers)).map(|c| c.p).collect(),
-        other => return Err(bad(CMD, format!("unknown `selection` \"{other}\" (expected \"auto\" or \"manual\")"))),
+        other => return Err(bad(cmd, format!("unknown `selection` \"{other}\" (expected \"auto\" or \"manual\")"))),
     };
 
     let before = chosen.len();
@@ -113,16 +180,27 @@ fn run_create_mnt(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         0
     };
+    Ok((chosen, skipped))
+}
+
+fn too_few_points_err(cmd: &str, usable: usize, skipped: usize) -> crate::EngineError {
+    bad(
+        cmd,
+        format!(
+            "not enough points with an altitude to triangulate: {usable} found (need at least 3); \
+             {skipped} point(s) were skipped for having no altitude"
+        ),
+    )
+}
+
+fn run_create_mnt(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "terrain.create_mnt";
+    let (chosen, skipped) = select_points(s, CMD, p)?;
     if chosen.len() < 3 {
-        return Err(bad(
-            CMD,
-            format!(
-                "not enough points with an altitude to triangulate: {} found (need at least 3); \
-                 {skipped} point(s) were skipped for having no altitude",
-                chosen.len()
-            ),
-        ));
+        return Err(too_few_points_err(CMD, chosen.len(), skipped));
     }
+    let draw = bool_or(p, "draw", true);
+    let layer = str_param(p, "layer").filter(|l| !l.trim().is_empty()).unwrap_or(DEFAULT_MNT_LAYER).to_string();
 
     let tin = triangulate(&chosen).map_err(|e| terrain_err(CMD, e))?;
     let mut edge_count = 0usize;
@@ -135,7 +213,7 @@ fn run_create_mnt(s: &mut Session, p: &Value) -> Result<Value> {
                     continue;
                 }
                 let (Some(a), Some(b)) = (tin.points.get(i), tin.points.get(j)) else { continue };
-                s.add_entity(EntityKind::Line(Line { a: *a, b: *b }))?;
+                add_on_layer(s, &layer, cadcraft_color::Color::Index(3), EntityKind::Line(Line { a: *a, b: *b }))?;
                 edge_count += 1;
             }
         }
@@ -147,7 +225,226 @@ fn run_create_mnt(s: &mut Session, p: &Value) -> Result<Value> {
         "triangleCount": tin.triangles.len(),
         "edgeCount": edge_count,
         "elevationRange": tin.elevation_range(),
+        "layer": layer,
     }))
+}
+
+fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "terrain.create_contours";
+    let (chosen, skipped) = select_points(s, CMD, p)?;
+    if chosen.len() < 3 {
+        return Err(too_few_points_err(CMD, chosen.len(), skipped));
+    }
+    let orders = p.get("orders").and_then(Value::as_array).cloned().unwrap_or_default();
+    if orders.is_empty() {
+        return Err(bad(CMD, "`orders` (array of {step, layer}) must have at least one entry"));
+    }
+    let clear = bool_or(p, "clearLayers", true);
+    let draw = bool_or(p, "draw", true);
+
+    let tin = triangulate(&chosen).map_err(|e| terrain_err(CMD, e))?;
+
+    let mut out_orders = Vec::with_capacity(orders.len());
+    for (i, o) in orders.iter().enumerate() {
+        let step = o
+            .get("step")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .ok_or_else(|| bad(CMD, format!("orders[{i}].step must be a positive finite number")))?;
+        let layer = o
+            .get("layer")
+            .and_then(Value::as_str)
+            .filter(|l| !l.trim().is_empty())
+            .ok_or_else(|| bad(CMD, format!("orders[{i}].layer is required")))?;
+        let color = o.get("color").and_then(Value::as_u64).and_then(|c| u8::try_from(c).ok()).filter(|c| *c >= 1).map(cadcraft_color::Color::Index);
+
+        if draw && clear {
+            clear_layer(s, layer)?;
+        }
+
+        let segments = contours(&tin, step);
+        let mut levels: Vec<f64> = segments.iter().map(|sg| sg.elevation).collect();
+        levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        levels.dedup();
+
+        let mut seg_count = 0usize;
+        if draw {
+            for seg in &segments {
+                add_on_layer(
+                    s,
+                    layer,
+                    color.unwrap_or(cadcraft_color::Color::ByLayer),
+                    EntityKind::Line(Line { a: seg.start.to3(seg.elevation), b: seg.end.to3(seg.elevation) }),
+                )?;
+                seg_count += 1;
+            }
+        }
+        out_orders.push(json!({ "step": step, "layer": layer, "levelCount": levels.len(), "segmentCount": seg_count }));
+    }
+
+    Ok(json!({ "pointCount": tin.points.len(), "elevationRange": tin.elevation_range(), "orders": out_orders }))
+}
+
+/// Every `LINE` entity on any of `layers` in the active space, as a flat 2D segment plus its
+/// elevation (assumed constant along the segment, true for anything `terrain.create_contours`
+/// drew) - `terrain.dimension_contours`' only way to find contours, since nothing here keeps a
+/// TIN or a contour set around between calls.
+fn contour_lines_on_layers(s: &Session, layers: &[String]) -> Vec<(Vec2, Vec2, f64)> {
+    let Ok(st) = s.state() else { return Vec::new() };
+    let Some(store) = st.doc.space(&st.space) else { return Vec::new() };
+    store
+        .iter()
+        .filter(|e| layers.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer)))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) if (l.a.z - l.b.z).abs() < 1e-6 => Some((l.a.xy(), l.b.xy(), l.a.z)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Chains raw, per-triangle contour segments sharing an elevation into walkable polylines by
+/// matching endpoints within `EPS` - greedy and O(n^2), fine for the segment counts one MNT
+/// produces. A segment nothing else connects to becomes its own 2-point chain.
+fn chain_segments(mut remaining: Vec<(Vec2, Vec2)>) -> Vec<Vec<Vec2>> {
+    const EPS: f64 = 1e-6;
+    let mut chains: Vec<Vec<Vec2>> = Vec::new();
+    while let Some((a, b)) = remaining.pop() {
+        let mut chain = vec![a, b];
+        while let Some(&tail) = chain.last() {
+            if let Some(pos) = remaining.iter().position(|(p, q)| (*p - tail).len() < EPS || (*q - tail).len() < EPS) {
+                let (p, q) = remaining.remove(pos);
+                chain.push(if (p - tail).len() < EPS { q } else { p });
+                continue;
+            }
+            let head = chain[0];
+            if let Some(pos) = remaining.iter().position(|(p, q)| (*p - head).len() < EPS || (*q - head).len() < EPS) {
+                let (p, q) = remaining.remove(pos);
+                chain.insert(0, if (p - head).len() < EPS { q } else { p });
+                continue;
+            }
+            break;
+        }
+        chains.push(chain);
+    }
+    chains
+}
+
+/// Positions (and local direction, for the label's rotation) spaced `interval` apart along a
+/// chained contour, starting half an interval in so a short, isolated chain still gets one label
+/// near its middle rather than none.
+fn labels_along_chain(chain: &[Vec2], interval: f64) -> Vec<(Vec2, f64)> {
+    let mut out = Vec::new();
+    if chain.len() < 2 || !interval.is_finite() || interval <= 0.0 {
+        return out;
+    }
+    let mut next_at = interval / 2.0;
+    let mut acc = 0.0;
+    for w in chain.windows(2) {
+        let d = w[1] - w[0];
+        let seg_len = d.len();
+        if seg_len <= 0.0 {
+            continue;
+        }
+        while next_at <= acc + seg_len {
+            let t = (next_at - acc) / seg_len;
+            out.push((w[0] + d * t, d.y.atan2(d.x)));
+            next_at += interval;
+        }
+        acc += seg_len;
+    }
+    out
+}
+
+fn axis_point(cmd: &str, p: &Value, which: &str) -> Result<Vec2> {
+    let v = p.get("axis").and_then(|o| o.get(which)).ok_or_else(|| bad(cmd, format!("`axis.{which}` ([x, y]) is required for `mode: \"axis\"`")))?;
+    let a = v.as_array().ok_or_else(|| bad(cmd, format!("`axis.{which}` must be an array [x, y]")))?;
+    let get = |k: usize| a.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+    match (get(0), get(1)) {
+        (Some(x), Some(y)) => Ok(Vec2::new(x, y)),
+        _ => Err(bad(cmd, format!("`axis.{which}` must be [x, y] of finite numbers"))),
+    }
+}
+
+fn run_dimension_contours(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "terrain.dimension_contours";
+    let layers = names_param(p, "layers");
+    if layers.is_empty() {
+        return Err(bad(CMD, "`layers` (array of contour layer names to label) must have at least one entry"));
+    }
+    let mode = str_param(p, "mode").unwrap_or("regular");
+    let decimals = p.get("decimals").and_then(Value::as_u64).unwrap_or(2).min(10) as usize;
+    let height = f64_or(p, "height", s.doc()?.header.f64("TEXTSIZE", 0.2));
+    let suffix = str_param(p, "suffix").unwrap_or("").to_string();
+    let target_layer = str_param(p, "layer").filter(|l| !l.trim().is_empty()).unwrap_or(DEFAULT_CONTOUR_LABEL_LAYER).to_string();
+    let draw = bool_or(p, "draw", true);
+
+    let raw = contour_lines_on_layers(s, &layers);
+    let mut by_level: Vec<(f64, Vec<(Vec2, Vec2)>)> = Vec::new();
+    for (a, b, z) in raw {
+        match by_level.iter_mut().find(|(lvl, _)| (*lvl - z).abs() < 1e-6) {
+            Some(entry) => entry.1.push((a, b)),
+            None => by_level.push((z, vec![(a, b)])),
+        }
+    }
+
+    let mut placements: Vec<(Vec2, f64, f64)> = Vec::new();
+    match mode {
+        "regular" => {
+            let interval = f64_or(p, "interval", 10.0);
+            if !interval.is_finite() || interval <= 0.0 {
+                return Err(bad(CMD, "`interval` must be a positive finite number"));
+            }
+            for (z, segs) in &by_level {
+                for chain in chain_segments(segs.clone()) {
+                    for (pos, rot) in labels_along_chain(&chain, interval) {
+                        placements.push((pos, rot, *z));
+                    }
+                }
+            }
+        }
+        "axis" => {
+            let a = axis_point(CMD, p, "a")?;
+            let b = axis_point(CMD, p, "b")?;
+            let axis = GLine::new(a, b);
+            for (z, segs) in &by_level {
+                for (p0, p1) in segs {
+                    let seg = GLine::new(*p0, *p1);
+                    if let Some(pt) = line_line(&axis, &seg) {
+                        let d = *p1 - *p0;
+                        placements.push((pt, d.y.atan2(d.x), *z));
+                    }
+                }
+            }
+        }
+        other => return Err(bad(CMD, format!("unknown `mode` \"{other}\" (expected \"regular\" or \"axis\")"))),
+    }
+
+    let mut drawn = 0usize;
+    if draw {
+        for (pos, rot, z) in &placements {
+            let value = format!("{:.*}{suffix}", decimals, z);
+            add_on_layer(
+                s,
+                &target_layer,
+                cadcraft_color::Color::ByLayer,
+                EntityKind::Text(Text {
+                    insert: Vec3::new(pos.x, pos.y, 0.0),
+                    align_pt: None,
+                    height,
+                    value,
+                    rotation: *rot,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Baseline,
+                }),
+            )?;
+            drawn += 1;
+        }
+    }
+
+    Ok(json!({ "labelCount": placements.len(), "drawn": drawn }))
 }
 
 fn points_param(cmd: &str, p: &Value) -> Result<Vec<Vec3>> {
@@ -235,6 +532,8 @@ fn run_contours(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use cadcraft_doc::{EntityKind, Line};
+    use cadcraft_geom::Vec3;
     use serde_json::{Value, json};
 
     use crate::Session;
@@ -388,5 +687,106 @@ mod tests {
         let out = s.execute("terrain.create_mnt", &json!({ "selection": "auto", "draw": false })).expect("should succeed");
         assert_eq!(out["edgeCount"].as_u64(), Some(0));
         assert_eq!(s.doc().unwrap().model.iter().count(), before);
+    }
+
+    #[test]
+    fn create_mnt_draws_into_a_green_mnt_layer_by_default() {
+        let mut s = session_with_doc();
+        import_tcpoint(&mut s, "1", 0.0, 0.0, 10.0);
+        import_tcpoint(&mut s, "2", 10.0, 0.0, 12.0);
+        import_tcpoint(&mut s, "3", 5.0, 10.0, 15.0);
+        let out = s.execute("terrain.create_mnt", &json!({ "selection": "auto" })).expect("should succeed");
+        assert_eq!(out["layer"].as_str(), Some("MNT"));
+        let d = s.doc().unwrap();
+        assert_eq!(d.layer("MNT").map(|l| l.color), Some(cadcraft_color::Color::Index(3)));
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("MNT") && matches!(e.kind, EntityKind::Line(_))));
+    }
+
+    #[test]
+    fn create_mnt_uses_the_given_layer_without_overriding_its_existing_color() {
+        let mut s = session_with_doc();
+        s.doc_mut().unwrap().ensure_layer("TN");
+        s.doc_mut().unwrap().layer_mut("TN").unwrap().color = cadcraft_color::Color::Index(5);
+        import_tcpoint(&mut s, "1", 0.0, 0.0, 10.0);
+        import_tcpoint(&mut s, "2", 10.0, 0.0, 12.0);
+        import_tcpoint(&mut s, "3", 5.0, 10.0, 15.0);
+        let out = s.execute("terrain.create_mnt", &json!({ "selection": "auto", "layer": "TN" })).expect("should succeed");
+        assert_eq!(out["layer"].as_str(), Some("TN"));
+        assert_eq!(s.doc().unwrap().layer("TN").map(|l| l.color), Some(cadcraft_color::Color::Index(5)));
+    }
+
+    // Every corner has a real (non-zero) altitude, since `ignoreNullAltitude` defaults to true.
+    fn tilted_square_points(s: &mut Session) {
+        import_tcpoint(s, "1", 0.0, 0.0, 1.0);
+        import_tcpoint(s, "2", 10.0, 0.0, 10.0);
+        import_tcpoint(s, "3", 10.0, 10.0, 10.0);
+        import_tcpoint(s, "4", 0.0, 10.0, 1.0);
+    }
+
+    #[test]
+    fn create_contours_draws_each_order_into_its_own_layer() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        let out = s
+            .execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "C2" }, { "step": 5.0, "layer": "C5" }] }))
+            .expect("should succeed");
+        let orders = out["orders"].as_array().expect("orders array");
+        assert_eq!(orders.len(), 2);
+        assert!(orders[0]["segmentCount"].as_u64().unwrap_or(0) > 0);
+        assert!(orders[1]["segmentCount"].as_u64().unwrap_or(0) > 0);
+        let d = s.doc().unwrap();
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C2")));
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C5")));
+    }
+
+    #[test]
+    fn create_contours_clear_layers_avoids_piling_up_duplicates() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        let params = json!({ "orders": [{ "step": 2.0, "layer": "C2" }] });
+        s.execute("terrain.create_contours", &params).expect("first run should succeed");
+        let after_first = s.doc().unwrap().model.iter().filter(|e| e.common.layer.eq_ignore_ascii_case("C2")).count();
+        s.execute("terrain.create_contours", &params).expect("second run should succeed");
+        let after_second = s.doc().unwrap().model.iter().filter(|e| e.common.layer.eq_ignore_ascii_case("C2")).count();
+        assert_eq!(after_first, after_second, "clearLayers defaults to true, so re-running shouldn't double the lines");
+    }
+
+    #[test]
+    fn create_contours_rejects_empty_orders() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        let out = s.execute("terrain.create_contours", &json!({ "orders": [] }));
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn dimension_contours_regular_places_at_least_one_label_per_level() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "C2" }] })).expect("should succeed");
+        let out = s.execute("terrain.dimension_contours", &json!({ "layers": ["C2"], "mode": "regular", "interval": 1.0 })).expect("should succeed");
+        assert!(out["labelCount"].as_u64().unwrap_or(0) > 0);
+        let d = s.doc().unwrap();
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("COTES_COURBES") && matches!(e.kind, EntityKind::Text(_))));
+    }
+
+    #[test]
+    fn dimension_contours_axis_labels_only_where_the_axis_crosses() {
+        let mut s = session_with_doc();
+        // Three parallel horizontal contour lines at y = 0, 1, 2, each a distinct elevation.
+        for (i, y) in [0.0, 1.0, 2.0].into_iter().enumerate() {
+            s.add_entity(EntityKind::Line(Line { a: Vec3::new(0.0, y, i as f64), b: Vec3::new(10.0, y, i as f64) })).unwrap();
+        }
+        let out = s
+            .execute("terrain.dimension_contours", &json!({ "layers": ["0"], "mode": "axis", "axis": { "a": [5.0, -1.0], "b": [5.0, 3.0] } }))
+            .expect("should succeed");
+        assert_eq!(out["labelCount"].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn dimension_contours_rejects_an_empty_layer_list() {
+        let mut s = session_with_doc();
+        let out = s.execute("terrain.dimension_contours", &json!({ "layers": [] }));
+        assert!(out.is_err());
     }
 }
