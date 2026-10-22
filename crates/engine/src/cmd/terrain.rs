@@ -54,11 +54,14 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("terrain.create_contours", "Create Contours...", run_create_contours).menu(&["Topo 3D", "Create Contours..."]).params(
             "{selection, blockNames?, layers?, handles?, ignoreNullAltitude? (same as terrain.create_mnt), \
-             orders: [{step: number>0, layer: string, color?: 1..255}] (at least one; each order draws \
-             every contour level that's a multiple of its own `step` into its own `layer`, independently \
-             of the other orders), clearLayers?: bool (default true: erase what's already on an order's \
-             layer before drawing), draw?: bool (default true)} → {pointCount, elevationRange, \
-             orders: [{step, layer, levelCount, segmentCount}]}.",
+             orders: [{step: number>0, layer: string, color?: 1..255 (ACI), colorRgb?: [r,g,b] \
+             (true colour, takes priority over `color`)}] (at least one; each order draws every \
+             contour level that's a multiple of its own `step` into its own `layer`, independently of \
+             the other orders), clearLayers?: bool (default true: erase what's already on an order's \
+             layer before drawing), smooth?: bool (default true: one light corner-cutting pass over \
+             each contour once its raw per-triangle segments are chained together), draw?: bool \
+             (default true)} → {pointCount, elevationRange, orders: [{step, layer, levelCount, \
+             segmentCount}]}.",
         ),
         CommandSpec::new("terrain.dimension_contours", "Dimension Contours...", run_dimension_contours)
             .menu(&["Topo 3D", "Dimension Contours..."])
@@ -241,6 +244,12 @@ fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let clear = bool_or(p, "clearLayers", true);
     let draw = bool_or(p, "draw", true);
+    // A light, optional smoothing pass (one iteration of Chaikin corner-cutting) over each
+    // contour once its raw per-triangle segments are chained into a walkable polyline - visually
+    // softer without needing a true spline entity, and the drawing still gets one `LINE` per
+    // (now smoothed) sub-segment, so anything reading raw lines back (`terrain.dimension_contours`
+    // included) keeps working unchanged.
+    let smooth = bool_or(p, "smooth", true);
 
     let tin = triangulate(&chosen).map_err(|e| terrain_err(CMD, e))?;
 
@@ -256,7 +265,7 @@ fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
             .and_then(Value::as_str)
             .filter(|l| !l.trim().is_empty())
             .ok_or_else(|| bad(CMD, format!("orders[{i}].layer is required")))?;
-        let color = o.get("color").and_then(Value::as_u64).and_then(|c| u8::try_from(c).ok()).filter(|c| *c >= 1).map(cadcraft_color::Color::Index);
+        let color = order_color(o);
 
         if draw && clear {
             clear_layer(s, layer)?;
@@ -269,20 +278,71 @@ fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
 
         let mut seg_count = 0usize;
         if draw {
-            for seg in &segments {
-                add_on_layer(
-                    s,
-                    layer,
-                    color.unwrap_or(cadcraft_color::Color::ByLayer),
-                    EntityKind::Line(Line { a: seg.start.to3(seg.elevation), b: seg.end.to3(seg.elevation) }),
-                )?;
-                seg_count += 1;
+            for (elevation, segs) in group_segments_by_level(&segments) {
+                for chain in chain_segments(segs) {
+                    let pts = if smooth { smooth_chain(&chain) } else { chain };
+                    for w in pts.windows(2) {
+                        add_on_layer(
+                            s,
+                            layer,
+                            color.unwrap_or(cadcraft_color::Color::ByLayer),
+                            EntityKind::Line(Line { a: w[0].to3(elevation), b: w[1].to3(elevation) }),
+                        )?;
+                        seg_count += 1;
+                    }
+                }
             }
         }
         out_orders.push(json!({ "step": step, "layer": layer, "levelCount": levels.len(), "segmentCount": seg_count }));
     }
 
     Ok(json!({ "pointCount": tin.points.len(), "elevationRange": tin.elevation_range(), "orders": out_orders }))
+}
+
+/// An order's colour: `colorRgb: [r, g, b]` (a true colour, what the dialog's colour picker
+/// sends) takes priority over `color` (a plain ACI index 1..=255, for script/MCP callers);
+/// neither given leaves it ByLayer.
+fn order_color(o: &Value) -> Option<cadcraft_color::Color> {
+    if let Some(rgb) = o.get("colorRgb").and_then(Value::as_array)
+        && let [Some(r), Some(g), Some(b)] =
+            [rgb.first(), rgb.get(1), rgb.get(2)].map(|v| v.and_then(Value::as_u64).and_then(|n| u8::try_from(n).ok()))
+    {
+        return Some(cadcraft_color::Color::True(cadcraft_color::Rgb(r, g, b)));
+    }
+    o.get("color").and_then(Value::as_u64).and_then(|c| u8::try_from(c).ok()).filter(|c| *c >= 1).map(cadcraft_color::Color::Index)
+}
+
+/// Groups raw contour segments by elevation level, each level's segments ready for
+/// [`chain_segments`] - shared by `terrain.create_contours` (chaining before it draws, to smooth)
+/// and conceptually mirrored by `terrain.dimension_contours`' own grouping of already-drawn lines.
+fn group_segments_by_level(segments: &[cadcraft_terrain::ContourSegment]) -> Vec<(f64, Vec<(Vec2, Vec2)>)> {
+    let mut by_level: Vec<(f64, Vec<(Vec2, Vec2)>)> = Vec::new();
+    for seg in segments {
+        match by_level.iter_mut().find(|(lvl, _)| (*lvl - seg.elevation).abs() < 1e-6) {
+            Some(entry) => entry.1.push((seg.start, seg.end)),
+            None => by_level.push((seg.elevation, vec![(seg.start, seg.end)])),
+        }
+    }
+    by_level
+}
+
+/// One pass of Chaikin corner-cutting: a light, non-interpolating smoothing that pulls each
+/// interior vertex toward the midpoints of its neighbouring segments while leaving the chain's
+/// two endpoints exactly where they were (so neighbouring orders/levels still meet where they
+/// should). A chain too short to have an interior corner is returned unchanged.
+fn smooth_chain(chain: &[Vec2]) -> Vec<Vec2> {
+    if chain.len() < 3 {
+        return chain.to_vec();
+    }
+    let mut out = Vec::with_capacity(chain.len() * 2);
+    out.push(chain[0]);
+    for w in chain.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        out.push(a + (b - a) * 0.25);
+        out.push(a + (b - a) * 0.75);
+    }
+    out.push(chain[chain.len() - 1]);
+    out
 }
 
 /// Every `LINE` entity on any of `layers` in the active space, as a flat 2D segment plus its
@@ -757,6 +817,27 @@ mod tests {
         tilted_square_points(&mut s);
         let out = s.execute("terrain.create_contours", &json!({ "orders": [] }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn create_contours_uses_a_true_colour_when_given_one() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "C2", "colorRgb": [255, 165, 0] }] }))
+            .expect("should succeed");
+        let d = s.doc().unwrap();
+        assert_eq!(d.layer("C2").map(|l| l.color), Some(cadcraft_color::Color::True(cadcraft_color::Rgb(255, 165, 0))));
+    }
+
+    #[test]
+    fn create_contours_with_smooth_false_keeps_the_raw_triangle_edge_count() {
+        let mut s = session_with_doc();
+        tilted_square_points(&mut s);
+        let smoothed = s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "SMOOTH" }], "smooth": true })).unwrap();
+        let raw = s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "RAW" }], "smooth": false })).unwrap();
+        let smoothed_n = smoothed["orders"][0]["segmentCount"].as_u64().unwrap_or(0);
+        let raw_n = raw["orders"][0]["segmentCount"].as_u64().unwrap_or(0);
+        assert!(smoothed_n > raw_n, "smoothing should subdivide each chained segment into more, shorter ones ({smoothed_n} vs {raw_n})");
     }
 
     #[test]

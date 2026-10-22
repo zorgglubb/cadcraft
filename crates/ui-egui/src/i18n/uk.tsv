@@ -1582,3 +1582,10 @@
 	Suffix (e.g. " m")	Суфікс (напр. " м")
 	Target layer	Цільовий шар
 	{n} elevation label(s) created	Створено підписів висот: {n}
+	2D (flat)	2D (плоско)
+	3D (use Z)	3D (з Z)
+	Colour	Колір
+	Contour orders (each its own step, layer and colour)	Порядки горизонталей (крок, шар і колір для кожного)
+	Slightly smooth the contours	Злегка згладити горизонталі
+	{n} point(s), altitude {lo} to {hi}	{n} точок, висота від {lo} до {hi}
+	{n} point(s), no elevation range yet	{n} точок, діапазон висот ще не визначено

@@ -20,6 +20,9 @@ pub struct State {
     block: String,
     delimiter: String,
     label: bool,
+    /// Whether each point's own CSV Z also becomes the block reference's insertion Z (true 3D
+    /// points), or every point stays flat on the XY plane with its Z only in the ALT attribute.
+    three_d: bool,
     preview: Vec<Vec<String>>,
 }
 
@@ -28,7 +31,7 @@ impl State {
         // A default layer named after the file, the same convention `plan.import_shp` uses -
         // the person can still type a different name before importing.
         let layer = std::path::Path::new(&path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_string();
-        State { path, layer, block: "CADCRAFT_TCPOINT".into(), delimiter: "auto".into(), label: true, preview: Vec::new() }
+        State { path, layer, block: "CADCRAFT_TCPOINT".into(), delimiter: "auto".into(), label: true, three_d: true, preview: Vec::new() }
     }
 }
 
@@ -83,6 +86,11 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 }
             });
             ui.checkbox(&mut st.label, crate::tl!("Show code label"));
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Points"));
+                ui.radio_value(&mut st.three_d, false, crate::tl!("2D (flat)"));
+                ui.radio_value(&mut st.three_d, true, crate::tl!("3D (use Z)"));
+            });
             ui.separator();
             ui.label(crate::tl!("Preview"));
             egui::ScrollArea::both().max_height(220.0).show(ui, |ui| {
@@ -120,6 +128,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 "block": st.block.trim(),
                 "delimiter": st.delimiter,
                 "label": st.label,
+                "threeD": st.three_d,
             }),
         );
         app.session.echo(match &r {
@@ -191,13 +200,32 @@ mod tests {
         std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;10.0;BORNE\n").unwrap();
         open(&mut app, path.to_string_lossy().to_string());
         let st = app.import_points_dlg.clone().unwrap();
+        assert!(st.three_d, "3D is the default");
 
         let r = app.run(
             "topo.import_points",
-            json!({ "path": st.path, "layer": st.layer, "block": st.block, "delimiter": st.delimiter, "label": st.label }),
+            json!({ "path": st.path, "layer": st.layer, "block": st.block, "delimiter": st.delimiter, "label": st.label, "threeD": st.three_d }),
         );
         let _ = std::fs::remove_file(&path);
         assert!(r.is_ok(), "{r:?}");
-        assert_eq!(r.unwrap()["importedPoints"].as_u64(), Some(1));
+        let v = r.unwrap();
+        assert_eq!(v["importedPoints"].as_u64(), Some(1));
+        assert_eq!(v["threeD"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn importing_in_2d_mode_passes_three_d_false() {
+        let mut app = app_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-ui-points-import2d-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;10.0;BORNE\n").unwrap();
+        open(&mut app, path.to_string_lossy().to_string());
+        let st = State { three_d: false, ..app.import_points_dlg.clone().unwrap() };
+
+        let r = app.run(
+            "topo.import_points",
+            json!({ "path": st.path, "layer": st.layer, "block": st.block, "delimiter": st.delimiter, "label": st.label, "threeD": st.three_d }),
+        );
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(r.unwrap()["threeD"].as_bool(), Some(false));
     }
 }

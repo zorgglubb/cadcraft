@@ -78,9 +78,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{path: string, label?: bool, layer?: string (created if missing; default: the \
                  current layer), block?: string (the block definition to insert each point as - \
                  created the first time it's used, default \"CADCRAFT_TCPOINT\"), \
-                 delimiter?: \"auto\"|\"comma\"|\"semicolon\"|\"colon\"|\"space\"|\"tab\" (default \"auto\")} \
-                 - each point becomes a `block` reference with its id/matricule, altitude and code \
-                 as MAT/ALT/COD attributes.",
+                 delimiter?: \"auto\"|\"comma\"|\"semicolon\"|\"colon\"|\"space\"|\"tab\" (default \"auto\"), \
+                 threeD?: bool (default true: the reference's own insertion point carries the CSV's \
+                 Z too, not just the ALT attribute, so the point sits at its real height; false \
+                 keeps every point flat on the XY plane)} - each point becomes a `block` reference \
+                 with its id/matricule, altitude and code as MAT/ALT/COD attributes.",
             ),
         // No menu entry: the Import Points dialog's own preview grid, recomputed as the person
         // changes the delimiter - never touches the drawing.
@@ -649,6 +651,11 @@ fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
     let label = bool_or(p, "label", true);
     let block = str_param(p, "block").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(TCPOINT_BLOCK).to_string();
     let layer = str_param(p, "layer").map(str::trim).filter(|n| !n.is_empty() && *n != "0").map(str::to_string);
+    // The block reference always carries its Z in the ALT attribute; `threeD` additionally puts
+    // it in the reference's own insertion point, so the point sits at its real height in space
+    // rather than flat on the XY plane. Default true: a CSV with a Z column is usually meant as
+    // a real 3D point.
+    let three_d = bool_or(p, "threeD", true);
 
     let text = text_encoding::read_to_string(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let import = csv_points::parse_with(&text, csv_delimiter(str_param(p, "delimiter")));
@@ -657,7 +664,19 @@ fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
     for cp in &import.points {
         let coord = Vec3::new(cp.x, cp.y, cp.z.unwrap_or(0.0));
         let code = cp.code.clone().or_else(|| Some(cp.id.clone()));
-        points.push(insert_tcpoint(s, coord, Some(cp.id.clone()), code, label, &block, layer.as_deref())?);
+        let out = insert_tcpoint(s, coord, Some(cp.id.clone()), code, label, &block, layer.as_deref())?;
+        if three_d && coord.z != 0.0 {
+            let h = out.get("handle").and_then(Value::as_str).and_then(Handle::parse_hex);
+            if let Some(h) = h {
+                let z = coord.z;
+                s.doc_mut()?.modify_entity(h, move |e| {
+                    if let EntityKind::Insert(ins) = &mut e.kind {
+                        ins.insert.z = z;
+                    }
+                })?;
+            }
+        }
+        points.push(out);
     }
 
     Ok(json!({
@@ -665,6 +684,7 @@ fn run_import_points(s: &mut Session, p: &Value) -> Result<Value> {
         "skippedLines": import.skipped_lines,
         "layer": layer,
         "block": block,
+        "threeD": three_d,
         "points": points,
     }))
 }
@@ -971,6 +991,46 @@ mod tests {
         assert_eq!(e.common.layer, "LEVE1");
         let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity") };
         assert_eq!(ins.block, "MYPOINT");
+    }
+
+    #[test]
+    fn import_points_defaults_to_putting_z_in_the_insertion_point_too() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-3d-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;12.5;BORNE\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        assert_eq!(out["threeD"].as_bool(), Some(true));
+        let pts = out["points"].as_array().expect("points array");
+        let handle = super::Handle::parse_hex(pts[0]["handle"].as_str().expect("handle")).expect("valid handle");
+        let doc = s.doc().expect("doc");
+        let e = doc.entity(handle).expect("entity");
+        let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity") };
+        assert!((ins.insert.z - 12.5).abs() < 1e-6, "3D import should carry Z into the reference's own position");
+        let alt = ins.attribs.iter().find(|a| a.tag == "ALT").expect("ALT attribute");
+        assert_eq!(alt.text.value, "12.500");
+    }
+
+    #[test]
+    fn import_points_with_three_d_false_keeps_every_point_flat() {
+        let mut s = session_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-topo-tcpoint-2d-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0.0;0.0;12.5;BORNE\n").expect("writing the temp points file should succeed");
+
+        let out = s.execute("topo.import_points", &json!({ "path": path.to_string_lossy(), "threeD": false }));
+        let _ = std::fs::remove_file(&path);
+        let out = out.expect("import should succeed");
+        assert_eq!(out["threeD"].as_bool(), Some(false));
+        let pts = out["points"].as_array().expect("points array");
+        let handle = super::Handle::parse_hex(pts[0]["handle"].as_str().expect("handle")).expect("valid handle");
+        let doc = s.doc().expect("doc");
+        let e = doc.entity(handle).expect("entity");
+        let super::EntityKind::Insert(ins) = &e.kind else { panic!("expected an INSERT entity") };
+        assert_eq!(ins.insert.z, 0.0, "2D import should keep the reference flat on the XY plane");
+        let alt = ins.attribs.iter().find(|a| a.tag == "ALT").expect("ALT attribute");
+        assert_eq!(alt.text.value, "12.500", "the altitude is still recorded in the ALT attribute either way");
     }
 
     #[test]

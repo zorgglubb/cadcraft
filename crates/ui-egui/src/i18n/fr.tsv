@@ -1261,3 +1261,10 @@
 	Text height (blank: drawing default)	Hauteur du texte (vide : valeur par défaut)
 	Suffix (e.g. " m")	Suffixe (ex. " m")
 	{n} elevation label(s) created	{n} cote(s) d'altitude créée(s)
+	2D (flat)	2D (à plat)
+	3D (use Z)	3D (avec Z)
+	Colour	Couleur
+	Contour orders (each its own step, layer and colour)	Ordres de courbes (pas, calque et couleur pour chacun)
+	Slightly smooth the contours	Lisser légèrement les courbes
+	{n} point(s), altitude {lo} to {hi}	{n} point(s), altitude de {lo} à {hi}
+	{n} point(s), no elevation range yet	{n} point(s), pas encore de plage d'altitude
