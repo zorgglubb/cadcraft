@@ -37,6 +37,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "freestation" => crate::freestationdlg::dialog(app, ctx, &mut open),
         "cheminement" => crate::cheminementdlg::dialog(app, ctx, &mut open),
         "editaltitudes" => crate::editaltitudesdlg::dialog(app, ctx, &mut open),
+        "createmnt" => crate::createmntdlg::dialog(app, ctx, &mut open),
         "searchpoints" => crate::searchpointsdlg::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),

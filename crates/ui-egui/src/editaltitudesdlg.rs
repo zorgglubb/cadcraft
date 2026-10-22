@@ -8,21 +8,23 @@ use serde_json::{Value, json};
 
 use crate::CadApp;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Default)]
 pub enum Selection {
     Blocks,
+    #[default]
     Manual,
     All,
     List,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Default)]
 pub enum Mode {
     Keep2D,
+    #[default]
     Keep3D,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct State {
     pub selection: Selection,
     pub block_names: Vec<String>,
@@ -34,27 +36,15 @@ pub struct State {
     pub mode: Mode,
     pub constant: String,
     pub decimals: u32,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        State {
-            selection: Selection::Manual,
-            block_names: Vec::new(),
-            layers: Vec::new(),
-            use_filter_for_manual: false,
-            matricule_filter: false,
-            matricule_first: String::new(),
-            matricule_last: String::new(),
-            mode: Mode::Keep3D,
-            constant: "0.0000".into(),
-            decimals: 2,
-        }
-    }
+    /// A prior `data.pick_entities` pick for `Selection::Manual` (empty until the "Select..."
+    /// button has been used at least once).
+    pub handles: Vec<cadcraft_doc::Handle>,
+    /// `true` between starting `data.pick_entities` and [`resume`] bringing the dialog back.
+    picking: bool,
 }
 
 pub fn open(app: &mut CadApp) {
-    app.edit_altitudes_dlg = Some(State::default());
+    app.edit_altitudes_dlg = Some(State { constant: "0.0000".into(), decimals: 2, ..State::default() });
     app.ui.dialog = Some("editaltitudes".into());
 }
 
@@ -63,43 +53,86 @@ fn num(s: &str) -> Option<f64> {
     if t.is_empty() { None } else { t.parse::<f64>().ok() }
 }
 
-/// `true` once the selection mode has what it needs (manual needs a prior pick-set, which this
-/// dialog doesn't yet gather itself - see the module doc comment) and the constant parses.
+/// `true` once the selection mode has what it needs and the constant parses.
 fn ready(st: &State) -> bool {
     let selection_ready = match st.selection {
         Selection::Blocks => !st.block_names.is_empty(),
-        Selection::Manual => false, // no selection-gathering service wired up yet
+        Selection::Manual => !st.handles.is_empty(),
         Selection::All => true,
         Selection::List => false, // not implemented - always disabled, see `Selection::List`'s radio button
     };
     selection_ready && num(&st.constant).is_some()
 }
 
-fn string_list(ui: &mut egui::Ui, id: &str, items: &mut Vec<String>) {
-    let mut remove: Option<usize> = None;
-    egui::ScrollArea::vertical().id_salt(id).max_height(70.0).show(ui, |ui| {
-        for (i, item) in items.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(item.as_str());
-                if ui.small_button("✕").clicked() {
-                    remove = Some(i);
-                }
-            });
-        }
-    });
-    if let Some(i) = remove {
-        items.remove(i);
+/// Hides the dialog and starts `data.pick_entities`, the same "Select objects" phase/resume
+/// pattern `tabledlg::start_pick`/`resume_assign` use for Data ▸ Assign Table....
+fn start_pick(app: &mut CadApp) {
+    let Some(st) = app.edit_altitudes_dlg.as_mut() else { return };
+    st.picking = true;
+    app.session.table_pick = None;
+    app.ui.dialog = None;
+    app.start("data.pick_entities");
+}
+
+/// Every frame: once a DATA.PICK_ENTITIES this dialog started has ended, take its handles and
+/// bring the dialog back (the handle set is left unchanged when the pick was cancelled).
+pub fn resume(app: &mut CadApp) {
+    if !app.edit_altitudes_dlg.as_ref().is_some_and(|s| s.picking) {
+        return;
     }
-    let text_id = ui.id().with(id).with("add");
-    let mut text = ui.data_mut(|d| d.get_temp::<String>(text_id)).unwrap_or_default();
-    ui.horizontal(|ui| {
-        ui.text_edit_singleline(&mut text);
-        if ui.small_button("+").clicked() && !text.trim().is_empty() {
-            items.push(text.trim().to_string());
-            text.clear();
+    if app.session.running.is_some() {
+        return;
+    }
+    let picked = app.session.table_pick.take();
+    let Some(st) = app.edit_altitudes_dlg.as_mut() else { return };
+    st.picking = false;
+    if let Some(hs) = picked {
+        st.handles = hs;
+    }
+    app.ui.dialog = Some("editaltitudes".into());
+}
+
+/// A scrollable checklist over `all` (every name actually usable - a block already present on a
+/// topo point, or an existing layer), toggling membership in `selected`. Replaces free-text entry
+/// so a name can't be mistyped into matching nothing; `all` empty shows a plain "none yet" hint.
+/// Shared with [`crate::createmntdlg`], which picks points for a MNT/TIN the same way.
+pub(crate) fn checklist(ui: &mut egui::Ui, id: &str, all: &[String], selected: &mut Vec<String>) {
+    if all.is_empty() {
+        ui.weak(crate::tl!("(none in the drawing yet)"));
+        return;
+    }
+    egui::ScrollArea::vertical().id_salt(id).max_height(70.0).show(ui, |ui| {
+        for name in all {
+            let mut checked = selected.iter().any(|s| s.eq_ignore_ascii_case(name));
+            if ui.checkbox(&mut checked, name.as_str()).changed() {
+                if checked {
+                    if !selected.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                        selected.push(name.clone());
+                    }
+                } else {
+                    selected.retain(|s| !s.eq_ignore_ascii_case(name));
+                }
+            }
         }
     });
-    ui.data_mut(|d| d.insert_temp(text_id, text));
+}
+
+/// Every block name already used by a topo point - free text would otherwise let a name be
+/// mistyped into silently matching nothing.
+pub(crate) fn block_choices(app: &mut CadApp) -> Vec<String> {
+    app.run("topo.point_block_names", json!({}))
+        .ok()
+        .and_then(|v| v.get("blocks").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every layer the drawing actually has.
+pub(crate) fn layer_choices(app: &CadApp) -> Vec<String> {
+    app.session.doc().map(|d| d.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default()
 }
 
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
@@ -108,6 +141,11 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         return;
     };
 
+    // What a block-name/layer picker can offer.
+    let block_choices = block_choices(app);
+    let layer_choices = layer_choices(app);
+
+    let mut pick = false;
     let (mut run, mut close) = (false, false);
     egui::Window::new(crate::tl!("Edit Altitudes")).open(open).resizable(true).collapsible(false).default_size(vec2(560.0, 520.0)).show(ctx, |ui| {
         // Everything above the OK/Cancel row scrolls on its own, so shrinking the window (it's
@@ -118,7 +156,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.radio_value(&mut st.selection, Selection::Blocks, crate::tl!("Point block name(s) + layer(s)"));
-                    ui.radio_value(&mut st.selection, Selection::Manual, crate::tl!("Manual selection"));
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut st.selection, Selection::Manual, crate::tl!("Manual selection"));
+                        if ui.button(crate::tl!("Select...")).clicked() {
+                            st.selection = Selection::Manual;
+                            pick = true;
+                        }
+                        ui.label(crate::tf!("{n} point(s)", n = st.handles.len()));
+                    });
                     ui.radio_value(&mut st.selection, Selection::All, crate::tl!("Every point in the drawing"));
                     ui.add_enabled_ui(false, |ui| {
                         ui.radio_value(&mut st.selection, Selection::List, crate::tl!("Every point in the list"));
@@ -127,21 +172,15 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.separator();
                 ui.vertical(|ui| {
                     ui.label(crate::tl!("Point block name(s)"));
-                    string_list(ui, "cc_altitudes_blocks", &mut st.block_names);
+                    checklist(ui, "cc_altitudes_blocks", &block_choices, &mut st.block_names);
                     ui.add_space(6.0);
                     ui.label(crate::tl!("Block insertion layer(s)"));
-                    string_list(ui, "cc_altitudes_layers", &mut st.layers);
+                    checklist(ui, "cc_altitudes_layers", &layer_choices, &mut st.layers);
                     ui.add_enabled_ui(st.selection == Selection::Manual, |ui| {
                         ui.checkbox(&mut st.use_filter_for_manual, crate::tl!("Use to filter the manual selection"));
                     });
                 });
             });
-            if st.selection == Selection::Manual {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    crate::tl!("Manual selection isn't wired up in this dialog yet - pick \"Point block name(s) + layer(s)\" or \"Every point in the drawing\" instead."),
-                );
-            }
             ui.separator();
 
             ui.checkbox(&mut st.matricule_filter, crate::tl!("Filter by matricule"));
@@ -195,6 +234,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         *open = false;
     }
 
+    if pick {
+        app.edit_altitudes_dlg = Some(st);
+        start_pick(app);
+        return;
+    }
+
     if run {
         let Some(constant) = num(&st.constant) else {
             app.edit_altitudes_dlg = Some(st);
@@ -213,6 +258,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         params.insert("blockNames".into(), json!(st.block_names));
         params.insert("layers".into(), json!(st.layers));
         params.insert("useFilterForManual".into(), json!(st.use_filter_for_manual));
+        if st.selection == Selection::Manual {
+            params.insert("handles".into(), json!(st.handles.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+        }
         if st.matricule_filter {
             params.insert("matriculeFirst".into(), json!(st.matricule_first.trim()));
             params.insert("matriculeLast".into(), json!(st.matricule_last.trim()));
@@ -332,5 +380,84 @@ mod tests {
         assert!(found.iter().any(|t| t == "Set/keep points in 3D"), "label wrapped: {found:?}");
         assert!(found.iter().any(|t| t == "OK"), "OK button not rendered: {found:?}");
         assert!(found.iter().any(|t| t == "Cancel"), "Cancel button not rendered: {found:?}");
+    }
+
+    #[test]
+    fn manual_selection_is_ready_only_once_something_was_picked() {
+        let st = State { selection: Selection::Manual, constant: "0".into(), ..State::default() };
+        assert!(!ready(&st), "no prior pick yet");
+        let st = State { handles: vec![cadcraft_doc::Handle(1)], ..st };
+        assert!(ready(&st));
+    }
+
+    /// The "Select..." button hides the dialog, runs `data.pick_entities`, and `resume` brings
+    /// it back with the picked handles in `State::handles` - the same flow `tabledlg`'s Assign
+    /// Table uses, now wired up here instead of leaving "Manual selection" permanently disabled.
+    #[test]
+    fn select_button_picks_entities_and_resume_brings_the_handles_back() {
+        let mut app = app_with_doc();
+        let r = app.session.execute("point", &json!({ "at": [0.0, 0.0] })).unwrap();
+        let h = r["handles"][0].as_str().unwrap().to_string();
+        let handle = cadcraft_doc::Handle::parse_hex(&h).unwrap();
+
+        open(&mut app);
+        start_pick(&mut app);
+        assert_eq!(app.ui.dialog, None, "dialog hides while picking");
+        assert!(app.edit_altitudes_dlg.as_ref().unwrap().picking);
+
+        app.session.input(cadcraft_engine::Input::Pick(vec![handle])).unwrap();
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        resume(&mut app);
+
+        assert_eq!(app.ui.dialog, Some("editaltitudes".into()));
+        let st = app.edit_altitudes_dlg.expect("state kept");
+        assert!(!st.picking);
+        assert_eq!(st.handles, vec![handle]);
+    }
+
+    /// Block-name and layer pickers are now a checklist over what the drawing actually has
+    /// (`topo.point_block_names` for blocks, `Drawing::layers` for layers) rather than free text
+    /// a user could mistype into matching nothing.
+    #[test]
+    fn block_and_layer_choices_come_from_the_drawing() {
+        let mut app = app_with_doc();
+        let path = std::env::temp_dir().join(format!("cadcraft-editaltitudes-checklist-test-{}.csv", std::process::id()));
+        std::fs::write(&path, "ID;X;Y;Z;CODE\nP1;0;0;10;X\n").unwrap();
+        app.run("topo.import_points", json!({ "path": path.to_string_lossy(), "layer": "BORNES", "label": false })).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        // What the dialog's pickers would offer - checked directly against the drawing rather
+        // than through a render (the dialog scrolls a lot of content into a modest default
+        // window size, so a lower item can be clipped out of a headless harness's painted output
+        // well before it would need scrolling for a real person using a normally-sized window).
+        assert_eq!(block_choices(&mut app), vec!["CADCRAFT_TCPOINT".to_string()]);
+        let layers = layer_choices(&app);
+        assert!(layers.iter().any(|n| n == "BORNES"), "{layers:?}");
+
+        // And a light render smoke test: the dialog opens and paints the one block choice
+        // without panicking.
+        open(&mut app);
+        use egui::{Shape, vec2};
+        use egui_kittest::Harness;
+        fn texts(shape: &Shape, out: &mut Vec<String>) {
+            match shape {
+                Shape::Text(t) => out.push(t.galley.text().to_string()),
+                Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
+        let mut open_flag = true;
+        let mut h = Harness::builder().with_size(vec2(700.0, 700.0)).build_ui_state(
+            |ui, app: &mut CadApp| {
+                dialog(app, ui.ctx(), &mut open_flag);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            texts(&s.shape, &mut found);
+        }
+        assert!(found.iter().any(|t| t == "CADCRAFT_TCPOINT"), "{found:?}");
     }
 }

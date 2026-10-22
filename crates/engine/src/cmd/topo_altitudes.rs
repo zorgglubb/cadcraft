@@ -17,14 +17,34 @@ use super::*;
 use crate::{Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("topo.edit_altitudes", "Edit Altitudes", run_edit_altitudes).menu(&["Topo 2D", "Points", "Edit Altitudes"]).params(
-        "{selection: \"blocks\"|\"manual\"|\"all\", blockNames?: [string], layers?: [string], \
+    vec![
+        CommandSpec::new("topo.edit_altitudes", "Edit Altitudes", run_edit_altitudes).menu(&["Topo 2D", "Points", "Edit Altitudes"]).params(
+            "{selection: \"blocks\"|\"manual\"|\"all\", blockNames?: [string], layers?: [string], \
                  handles?: [string] (required for \"manual\"), useFilterForManual?: bool, \
                  matriculeFirst?: string, matriculeLast?: string, mode: \"2d\"|\"3d\", constant: number, \
                  decimals?: integer (0-10, default 2)} → {updated: integer, handles: [string]}. Every \
                  matching point's ALT attribute is set to (old value + constant) rounded to `decimals`; \
                  \"3d\" also sets the block's own insertion Z to that value, \"2d\" pins it back to 0.",
-    )]
+        ),
+        CommandSpec::new("topo.point_block_names", "Point Block Names", run_point_block_names)
+            .noundo()
+            .params("{} → {blocks: [string]}. Every distinct block name among the active space's topo point blocks (any INSERT carrying an ALT attribute), so a dialog can offer them as a pick list instead of free text."),
+    ]
+}
+
+/// Every distinct block name among the active space's topo point blocks, first-occurrence
+/// casing kept, sorted case-insensitively - for a dialog's block-name picker (`Selection::Blocks`
+/// in `editaltitudesdlg`, say), which otherwise has no way to know what block names exist without
+/// the user typing one blind.
+fn run_point_block_names(s: &mut Session, _p: &Value) -> Result<Value> {
+    let mut names: Vec<String> = Vec::new();
+    for c in all_point_candidates(s)? {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&c.block)) {
+            names.push(c.block);
+        }
+    }
+    names.sort_by_key(|n| n.to_ascii_lowercase());
+    Ok(json!({ "blocks": names }))
 }
 
 /// One topo point block in scope: its handle, block name, layer and parsed `ALT` value (`0.0`
@@ -229,5 +249,23 @@ mod tests {
         let mut s = doc_session();
         let out = s.execute("topo.edit_altitudes", &json!({ "selection": "list", "mode": "2d", "constant": 0.0 }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn point_block_names_lists_every_distinct_block_once() {
+        let mut s = doc_session();
+        insert_tcpoint(&mut s, 0.0, 0.0, 10.0, "1");
+        insert_tcpoint(&mut s, 10.0, 0.0, 20.0, "2");
+        // A second point with the same (default) block name must not duplicate the entry.
+        let out = s.execute("topo.point_block_names", &json!({})).expect("should succeed");
+        let blocks: Vec<&str> = out["blocks"].as_array().expect("blocks").iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(blocks, vec!["CADCRAFT_TCPOINT"]);
+    }
+
+    #[test]
+    fn point_block_names_is_empty_with_no_points_in_the_drawing() {
+        let mut s = doc_session();
+        let out = s.execute("topo.point_block_names", &json!({})).expect("should succeed");
+        assert_eq!(out["blocks"].as_array().unwrap().len(), 0);
     }
 }

@@ -771,6 +771,7 @@
 	Search for parameter	Пошук параметра
 	Second and next points:	Друга та наступні точки:
 	Select	Вибрати
+	Select...	Вибрати...
 	Select 2D polyline	Виберіть 2D-полілінію
 	Select All	Вибрати все
 	Select Objects	Вибрати об'єкти
@@ -1377,6 +1378,8 @@
 	Every point in the list	Усі точки зі списку
 	Point block name(s)	Назва(и) блоків точок
 	Block insertion layer(s)	Шар(и) вставки блоків
+	Point Block Names	Назви блоків точок
+	(none in the drawing yet)	(поки що немає в кресленні)
 	Use to filter the manual selection	Використовувати для фільтрації ручного вибору
 	Manual selection isn't wired up in this dialog yet - pick "Point block name(s) + layer(s)" or "Every point in the drawing" instead.	Ручний вибір у цьому вікні ще не реалізовано - виберіть «Назва(и) блоків точок + шар(и)» або «Усі точки креслення».
 	Filter by matricule	Фільтрація за номерами
@@ -1409,6 +1412,7 @@
 	Topo	Топо
 	Triangulate	Тріангулювати
 	Triangulate (TIN)	Тріангулювати (TIN)
+	Create TIN...	Створити TIN...
 	Zero Value	Нульове значення
 	Zero Value (VO)	Нульове значення (VO)
 	Add .VEC File…	Додати файл .VEC…
@@ -1552,3 +1556,8 @@
 	At least one observation is required	Потрібне принаймні одне спостереження
 	Inserted {n} point(s)	Вставлено {n} точок(и)
 	Inspect GSI Carnet	Аналіз журналу GSI
+	Ignore points with a null altitude	Ігнорувати точки з нульовою висотою
+	Estimate...	Оцінити...
+	Points usable	Придатні точки
+	Skipped (null altitude)	Пропущено (нульова висота)
+	TIN created: {n} point(s), {t} triangle(s)	TIN створено: {n} точок(и), {t} трикутник(ів)

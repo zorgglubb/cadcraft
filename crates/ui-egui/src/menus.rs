@@ -304,6 +304,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::editaltitudesdlg::open(app);
             Ok(Value::Null)
         }
+        "terrain.create_mnt" if params.is_null() && app.session.state().is_ok() => {
+            crate::createmntdlg::open(app);
+            Ok(Value::Null)
+        }
         // One file at a time for now - EDIGEO parcels often span several `.VEC` files, but
         // there is no multi-select picker service yet (a further increment).
         "topo.import_edigeo" if no_path => {

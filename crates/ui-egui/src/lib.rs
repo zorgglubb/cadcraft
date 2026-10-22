@@ -20,6 +20,7 @@ pub mod closing;
 pub mod cmdline;
 pub mod context_menu;
 pub mod control;
+pub mod createmntdlg;
 pub mod credits;
 pub mod crsdlg;
 pub mod dialogs;
@@ -307,6 +308,8 @@ pub struct CadApp {
     pub edit_altitudes_dlg: Option<editaltitudesdlg::State>,
     /// The Search Points... dialog while open ([`searchpointsdlg`]).
     pub search_points_dlg: Option<searchpointsdlg::State>,
+    /// The Create TIN... (MNT) dialog while open ([`createmntdlg`]).
+    pub create_mnt_dlg: Option<createmntdlg::State>,
 }
 
 impl CadApp {
@@ -357,6 +360,7 @@ impl CadApp {
             cheminement_dlg: None,
             edit_altitudes_dlg: None,
             search_points_dlg: None,
+            create_mnt_dlg: None,
         }
     }
 
@@ -651,6 +655,8 @@ impl CadApp {
         carroyagedlg::resume(self);
         tabledlg::resume_assign(self);
         tabledlg::resume_remove(self);
+        editaltitudesdlg::resume(self);
+        createmntdlg::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

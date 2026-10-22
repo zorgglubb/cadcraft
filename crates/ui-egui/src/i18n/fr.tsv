@@ -646,6 +646,7 @@
 	Search for parameter	Rechercher un paramètre
 	Second and next points:	Deuxième point et points suivants :
 	Select	Sélectionner
+	Select...	Sélectionner...
 	Select 2D polyline	Sélectionner une polyligne 2D
 	Select All	Sélectionner tout
 	Select Objects	Sélectionner les objets
@@ -1055,6 +1056,8 @@
 	Every point in the list	Tous les points contenus dans la liste
 	Point block name(s)	Nom(s) des blocs points
 	Block insertion layer(s)	Calque(s) d'insertion des blocs
+	Point Block Names	Noms des blocs points
+	(none in the drawing yet)	(aucun dans le dessin pour l'instant)
 	Use to filter the manual selection	Utiliser pour filtrer la sélection manuelle
 	Manual selection isn't wired up in this dialog yet - pick "Point block name(s) + layer(s)" or "Every point in the drawing" instead.	La sélection manuelle n'est pas encore disponible dans cette fenêtre - choisissez plutôt « Nom(s) des blocs points + calque(s) » ou « Tous les points du dessin ».
 	Filter by matricule	Filtrage par matricules
@@ -1087,6 +1090,7 @@
 	Topo	Topo
 	Triangulate	Trianguler
 	Triangulate (TIN)	Trianguler (TIN)
+	Create TIN...	Créer un TIN...
 	Zero Value	Valeur origine
 	Zero Value (VO)	Valeur origine (VO)
 	Add .VEC File…	Ajouter un fichier .VEC…
@@ -1231,3 +1235,8 @@
 	At least one observation is required	Au moins une observation est requise
 	Inserted {n} point(s)	{n} point(s) inséré(s)
 	Inspect GSI Carnet	Inspecter le carnet GSI
+	Ignore points with a null altitude	Ignorer les points à altitude nulle
+	Estimate...	Estimer...
+	Points usable	Points utilisables
+	Skipped (null altitude)	Ignorés (altitude nulle)
+	TIN created: {n} point(s), {t} triangle(s)	TIN créé : {n} point(s), {t} triangle(s)
