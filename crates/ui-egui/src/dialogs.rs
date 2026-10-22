@@ -40,6 +40,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "createmnt" => crate::createmntdlg::dialog(app, ctx, &mut open),
         "createcontours" => crate::createcontoursdlg::dialog(app, ctx, &mut open),
         "dimensioncontours" => crate::dimensioncontoursdlg::dialog(app, ctx, &mut open),
+        "renumberpoints" => crate::renumberpointsdlg::dialog(app, ctx, &mut open),
         "searchpoints" => crate::searchpointsdlg::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),

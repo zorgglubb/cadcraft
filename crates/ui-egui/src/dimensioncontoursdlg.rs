@@ -1,13 +1,14 @@
 //! Topo 3D ▸ Dimension Contours... (TERRAIN.DIMENSION_CONTOURS): labels the elevation of
 //! existing contour lines (whatever [`crate::createcontoursdlg`] or anything else left on the
 //! chosen layers), either at regular intervals along each contour's length or wherever a
-//! user-given axis crosses them.
+//! user-drawn axis crosses them. Every label (either mode) is rotated to read left-to-right, so
+//! consecutive labels along the same contour always face the same way.
 //!
-//! **Scope, stated plainly**: the axis's two points are typed in as coordinates rather than
-//! picked on screen - a real on-screen two-point pick would need its own interactive command and
-//! `Session` field (the way [`crate::createmntdlg`]'s manual point selection uses
-//! `data.pick_entities`/`Session::table_pick`), which is a larger, separate increment; typed
-//! coordinates are fully usable in the meantime for an axis drawn or measured elsewhere.
+//! The axis is drawn on screen with its own button ("Draw axis"), the same hide-the-dialog/
+//! start-an-interactive-command/resume pattern [`crate::editaltitudesdlg`]'s "Select..." button
+//! uses for `data.pick_entities` - here it's `terrain.draw_axis`/`Session::axis_pick` instead,
+//! since the axis is a whole clicked polyline (at least 2 points, ending on Enter or a
+//! double-click) rather than a single entity selection.
 
 use egui::vec2;
 use serde_json::{Value, json};
@@ -26,10 +27,11 @@ pub struct State {
     pub layers: Vec<String>,
     pub mode: Mode,
     pub interval: String,
-    pub axis_ax: String,
-    pub axis_ay: String,
-    pub axis_bx: String,
-    pub axis_by: String,
+    /// The axis last drawn with "Draw axis" (at least 2 points, in click order); empty until
+    /// drawn once.
+    pub axis: Vec<(f64, f64)>,
+    /// `true` between starting `terrain.draw_axis` and [`resume`] bringing the dialog back.
+    picking: bool,
     pub decimals: u32,
     pub height: String,
     pub suffix: String,
@@ -43,10 +45,8 @@ impl Default for State {
             layers: Vec::new(),
             mode: Mode::default(),
             interval: "10".into(),
-            axis_ax: String::new(),
-            axis_ay: String::new(),
-            axis_bx: String::new(),
-            axis_by: String::new(),
+            axis: Vec::new(),
+            picking: false,
             decimals: 2,
             height: String::new(),
             suffix: String::new(),
@@ -62,16 +62,40 @@ pub fn open(app: &mut CadApp) {
     app.ui.dialog = Some("dimensioncontours".into());
 }
 
+/// Hides the dialog and starts `terrain.draw_axis`, mirroring `editaltitudesdlg::start_pick`.
+fn start_draw_axis(app: &mut CadApp) {
+    let Some(st) = app.dimension_contours_dlg.as_mut() else { return };
+    st.picking = true;
+    app.session.axis_pick = None;
+    app.ui.dialog = None;
+    app.start("terrain.draw_axis");
+}
+
+/// Every frame: once a TERRAIN.DRAW_AXIS this dialog started has ended, take its polyline and
+/// bring the dialog back (the previous axis, if any, is kept when the draw was cancelled).
+pub fn resume(app: &mut CadApp) {
+    if !app.dimension_contours_dlg.as_ref().is_some_and(|s| s.picking) {
+        return;
+    }
+    if app.session.running.is_some() {
+        return;
+    }
+    let drawn = app.session.axis_pick.take();
+    let Some(st) = app.dimension_contours_dlg.as_mut() else { return };
+    st.picking = false;
+    if let Some(pts) = drawn {
+        st.axis = pts.into_iter().map(|p| (p.x, p.y)).collect();
+    }
+    app.ui.dialog = Some("dimensioncontours".into());
+}
+
 fn ready(st: &State) -> bool {
     if st.layers.is_empty() {
         return false;
     }
     match st.mode {
         Mode::Regular => st.interval.trim().parse::<f64>().is_ok_and(|v| v > 0.0),
-        Mode::Axis => {
-            [&st.axis_ax, &st.axis_ay, &st.axis_bx, &st.axis_by].iter().all(|f| f.trim().parse::<f64>().is_ok())
-                && (st.axis_ax.trim() != st.axis_bx.trim() || st.axis_ay.trim() != st.axis_by.trim())
-        }
+        Mode::Axis => st.axis.len() >= 2,
     }
 }
 
@@ -93,8 +117,8 @@ fn params(st: &State, draw: bool) -> Value {
             }
         }
         Mode::Axis => {
-            let f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
-            p.insert("axis".into(), json!({ "a": [f(&st.axis_ax), f(&st.axis_ay)], "b": [f(&st.axis_bx), f(&st.axis_by)] }));
+            let pts: Vec<[f64; 2]> = st.axis.iter().map(|&(x, y)| [x, y]).collect();
+            p.insert("axis".into(), json!({ "points": pts }));
         }
     }
     Value::Object(p)
@@ -110,6 +134,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
     let mut run = false;
     let mut close = false;
+    let mut draw_axis = false;
     egui::Window::new(crate::tl!("Dimension Contours...")).open(open).resizable(true).collapsible(false).default_size(vec2(480.0, 480.0)).show(
         ctx,
         |ui| {
@@ -126,21 +151,15 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.add(egui::TextEdit::singleline(&mut st.interval).desired_width(80.0));
                     });
                 }
-                ui.radio_value(&mut st.mode, Mode::Axis, crate::tl!("Where an axis crosses them"));
+                ui.radio_value(&mut st.mode, Mode::Axis, crate::tl!("Draw axis: one label at every crossing"));
                 if st.mode == Mode::Axis {
-                    egui::Grid::new("cc_dimcontours_axis").num_columns(3).show(ui, |ui| {
-                        ui.label("");
-                        ui.label("X");
-                        ui.label("Y");
-                        ui.end_row();
-                        ui.label(crate::tl!("Axis point 1"));
-                        ui.add(egui::TextEdit::singleline(&mut st.axis_ax).desired_width(80.0));
-                        ui.add(egui::TextEdit::singleline(&mut st.axis_ay).desired_width(80.0));
-                        ui.end_row();
-                        ui.label(crate::tl!("Axis point 2"));
-                        ui.add(egui::TextEdit::singleline(&mut st.axis_bx).desired_width(80.0));
-                        ui.add(egui::TextEdit::singleline(&mut st.axis_by).desired_width(80.0));
-                        ui.end_row();
+                    ui.horizontal(|ui| {
+                        draw_axis = ui.button(crate::tl!("Draw axis...")).clicked();
+                        if st.axis.len() >= 2 {
+                            ui.label(crate::tf!("{n} point(s) drawn", n = st.axis.len()));
+                        } else {
+                            ui.weak(crate::tl!("Click along the drawing to trace the axis, then Enter or double-click to finish"));
+                        }
                     });
                 }
                 ui.separator();
@@ -175,6 +194,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
     if close {
         *open = false;
+    }
+
+    if draw_axis {
+        app.dimension_contours_dlg = Some(st);
+        start_draw_axis(app);
+        return;
     }
 
     if run {
@@ -222,40 +247,46 @@ mod tests {
         assert!(!ready(&st), "no layers picked yet");
 
         let st = State { layers: vec!["C1".into()], mode: Mode::Axis, ..State::default() };
-        assert!(!ready(&st), "axis mode needs its four coordinates");
+        assert!(!ready(&st), "axis mode needs a drawn axis of at least 2 points");
 
-        let st = State {
-            layers: vec!["C1".into()],
-            mode: Mode::Axis,
-            axis_ax: "0".into(),
-            axis_ay: "0".into(),
-            axis_bx: "10".into(),
-            axis_by: "0".into(),
-            ..State::default()
-        };
+        let st = State { layers: vec!["C1".into()], mode: Mode::Axis, axis: vec![(0.0, 0.0), (10.0, 0.0)], ..State::default() };
         assert!(ready(&st));
     }
 
     #[test]
     fn params_builds_the_axis_object_only_in_axis_mode() {
-        let st = State {
-            layers: vec!["C1".into()],
-            mode: Mode::Axis,
-            axis_ax: "1".into(),
-            axis_ay: "2".into(),
-            axis_bx: "3".into(),
-            axis_by: "4".into(),
-            ..State::default()
-        };
+        let st = State { layers: vec!["C1".into()], mode: Mode::Axis, axis: vec![(1.0, 2.0), (3.0, 4.0)], ..State::default() };
         let p = params(&st, true);
-        assert_eq!(p["axis"]["a"], json!([1.0, 2.0]));
-        assert_eq!(p["axis"]["b"], json!([3.0, 4.0]));
+        assert_eq!(p["axis"]["points"], json!([[1.0, 2.0], [3.0, 4.0]]));
         assert!(p.get("interval").is_none());
 
         let st = State { layers: vec!["C1".into()], mode: Mode::Regular, interval: "2.5".into(), ..State::default() };
         let p = params(&st, true);
         assert_eq!(p["interval"].as_f64(), Some(2.5));
         assert!(p.get("axis").is_none());
+    }
+
+    #[test]
+    fn draw_axis_button_hides_the_dialog_and_resume_brings_back_the_drawn_points() {
+        let mut app = app_with_doc();
+        open(&mut app);
+        let mut st = app.dimension_contours_dlg.clone().unwrap();
+        st.mode = Mode::Axis;
+        app.dimension_contours_dlg = Some(st);
+
+        start_draw_axis(&mut app);
+        assert_eq!(app.ui.dialog, None, "dialog hides while drawing the axis");
+        assert!(app.dimension_contours_dlg.as_ref().unwrap().picking);
+
+        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(0.0, 0.0))).unwrap();
+        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(10.0, 5.0))).unwrap();
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+
+        resume(&mut app);
+        assert_eq!(app.ui.dialog, Some("dimensioncontours".into()));
+        let st = app.dimension_contours_dlg.unwrap();
+        assert!(!st.picking);
+        assert_eq!(st.axis, vec![(0.0, 0.0), (10.0, 5.0)]);
     }
 
     #[test]

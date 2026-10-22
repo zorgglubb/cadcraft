@@ -1167,6 +1167,10 @@
 	List Attribute Tables	Liste des tables d'attributs
 	Set Table Attribute	Définir un attribut de table
 	Pick Entities	Sélectionner des entités
+	Draw Axis	Tracer un axe
+	Point Radicals	Radicaux des points
+	Specify first axis point	Indiquez le premier point de l'axe
+	Specify next axis point (Enter to finish)	Indiquez le point suivant de l'axe (Entrée pour terminer)
 	Table name	Nom de la table
 	Fields	Champs
 	Add field	Ajouter un champ
@@ -1253,9 +1257,10 @@
 	Label placement	Placement des cotes
 	Regular intervals along each contour	Intervalles réguliers le long de chaque courbe
 	Interval	Intervalle
-	Where an axis crosses them	Là où un axe les croise
-	Axis point 1	Point d'axe 1
-	Axis point 2	Point d'axe 2
+	Draw axis: one label at every crossing	Tracer un axe : une cote à chaque intersection
+	Draw axis...	Tracer l'axe...
+	{n} point(s) drawn	{n} point(s) tracé(s)
+	Click along the drawing to trace the axis, then Enter or double-click to finish	Cliquez le long du dessin pour tracer l'axe, puis Entrée ou double-clic pour terminer
 	Label text	Texte de cotation
 	Decimals	Décimales
 	Text height (blank: drawing default)	Hauteur du texte (vide : valeur par défaut)
@@ -1268,3 +1273,13 @@
 	Slightly smooth the contours	Lisser légèrement les courbes
 	{n} point(s), altitude {lo} to {hi}	{n} point(s), altitude de {lo} à {hi}
 	{n} point(s), no elevation range yet	{n} point(s), pas encore de plage d'altitude
+	Renumber Points...	Réimmatriculer les points...
+	Radical	Radical
+	Index range	Plage d'indices
+	Existing matricules in the drawing	Matricules existants dans le dessin
+	Processing to perform	Traitement à effectuer
+	Renumber starting at	Réimmatriculer à partir de
+	Increment indices by	Incrémenter les indices de
+	Change radicals to	Changer les radicaux en
+	Add before radicals	Ajouter avant les radicaux
+	{n} point(s) renumbered	{n} point(s) réimmatriculé(s)

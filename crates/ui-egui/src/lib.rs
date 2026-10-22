@@ -33,6 +33,7 @@ pub mod hatchdlg;
 pub mod importgsidlg;
 pub mod importpointsdlg;
 mod mtext_editor;
+pub mod renumberpointsdlg;
 pub mod searchpointsdlg;
 pub mod spacemouse;
 pub mod stationdlg;
@@ -316,6 +317,8 @@ pub struct CadApp {
     pub create_contours_dlg: Option<createcontoursdlg::State>,
     /// The Dimension Contours... dialog while open ([`dimensioncontoursdlg`]).
     pub dimension_contours_dlg: Option<dimensioncontoursdlg::State>,
+    /// The Renumber Points... dialog while open ([`renumberpointsdlg`]).
+    pub renumber_points_dlg: Option<renumberpointsdlg::State>,
 }
 
 impl CadApp {
@@ -369,6 +372,7 @@ impl CadApp {
             create_mnt_dlg: None,
             create_contours_dlg: None,
             dimension_contours_dlg: None,
+            renumber_points_dlg: None,
         }
     }
 
@@ -666,6 +670,8 @@ impl CadApp {
         editaltitudesdlg::resume(self);
         createmntdlg::resume(self);
         createcontoursdlg::resume(self);
+        dimensioncontoursdlg::resume(self);
+        renumberpointsdlg::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

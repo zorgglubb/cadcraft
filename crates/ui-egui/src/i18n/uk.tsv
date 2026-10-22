@@ -1489,6 +1489,10 @@
 	List Attribute Tables	Список таблиць атрибутів
 	Set Table Attribute	Встановити атрибут таблиці
 	Pick Entities	Вибрати об'єкти
+	Draw Axis	Намалювати вісь
+	Point Radicals	Радикали точок
+	Specify first axis point	Укажіть першу точку осі
+	Specify next axis point (Enter to finish)	Укажіть наступну точку осі (Enter, щоб завершити)
 	Table name	Назва таблиці
 	Fields	Поля
 	Add field	Додати поле
@@ -1573,9 +1577,10 @@
 	Label placement	Розміщення підписів
 	Regular intervals along each contour	Через рівні інтервали вздовж кожної горизонталі
 	Interval	Інтервал
-	Where an axis crosses them	Там, де їх перетинає вісь
-	Axis point 1	Точка осі 1
-	Axis point 2	Точка осі 2
+	Draw axis: one label at every crossing	Намалювати вісь: одна позначка на кожному перетині
+	Draw axis...	Намалювати вісь...
+	{n} point(s) drawn	Намальовано {n} точку(и)
+	Click along the drawing to trace the axis, then Enter or double-click to finish	Клацайте по кресленню, щоб провести вісь, потім Enter або подвійний клац, щоб закінчити
 	Label text	Текст підпису
 	Decimals	Десяткові знаки
 	Text height (blank: drawing default)	Висота тексту (порожньо: за замовчуванням)
@@ -1589,3 +1594,13 @@
 	Slightly smooth the contours	Злегка згладити горизонталі
 	{n} point(s), altitude {lo} to {hi}	{n} точок, висота від {lo} до {hi}
 	{n} point(s), no elevation range yet	{n} точок, діапазон висот ще не визначено
+	Renumber Points...	Перенумерувати точки...
+	Radical	Радикал
+	Index range	Діапазон індексів
+	Existing matricules in the drawing	Наявні матрикули в кресленні
+	Processing to perform	Операція, яку виконати
+	Renumber starting at	Перенумерувати починаючи з
+	Increment indices by	Збільшити індекси на
+	Change radicals to	Змінити радикали на
+	Add before radicals	Додати перед радикалами
+	{n} point(s) renumbered	Перенумеровано {n} точку(и)

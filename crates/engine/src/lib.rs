@@ -676,6 +676,11 @@ pub struct Session {
     /// The entities last picked with DATA.PICK_ENTITIES (the Assign Table dialog's "Select
     /// entities" button).
     pub table_pick: Option<Vec<Handle>>,
+    /// The polyline (at least 2 points) last drawn with TERRAIN.DRAW_AXIS (the Dimension
+    /// Contours dialog's "Draw axis" button): every point the user clicked, in order, ending the
+    /// moment Enter (or a double-click, which the UI sends as Enter while this command runs) was
+    /// pressed.
+    pub axis_pick: Option<Vec<Vec2>>,
 }
 
 impl Default for Session {
@@ -726,6 +731,7 @@ impl Session {
             hatch_picks: None,
             carroyage_pick: None,
             table_pick: None,
+            axis_pick: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

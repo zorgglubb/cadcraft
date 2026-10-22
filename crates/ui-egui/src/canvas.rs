@@ -1581,6 +1581,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.session.echo(e.to_string());
         }
     }
+    // TERRAIN.DRAW_AXIS (the Dimension Contours dialog's "Draw axis" button) ends on a
+    // double-click, as asked for, rather than needing Enter or a right-click like other
+    // multi-point commands - the trailing duplicate point the double-click's own second click
+    // just placed is harmless (a zero-length last segment finds no extra crossings).
+    if inside && dbl_primary && app.session.running.as_ref().is_some_and(|r| r.id == "terrain.draw_axis") {
+        let _ = app.session.input(Input::Enter);
+    }
     // Press-and-drag selection window (AutoCAD's PICKDRAG = 2; click-click still works): a drag
     // that starts while objects are being selected opens a window where the button went down,
     // and letting go closes it. Drags on grips and drags while drawing are left alone.

@@ -23,7 +23,7 @@ use cadcraft_terrain::{TerrainError, contours, triangulate};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 /// The MNT's own triangulation edges land here by default - a layer CADCraft creates and colours
 /// green the first time it's needed, not copied from any reference application's convention.
@@ -68,12 +68,21 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(
                 "{layers: [string] (contour layers to label; required), mode: \"regular\"|\"axis\" (default \
                  \"regular\"), interval?: number (world units between labels along a contour's length; \
-                 default 10, \"regular\" mode), axis?: {a: [x,y], b: [x,y]} (required for \"axis\" mode: \
-                 one label wherever this segment crosses a contour), decimals?: integer (default 2), \
-                 height?: number (default TEXTSIZE), suffix?: string (appended after the number, e.g. \
-                 \" m\"; default \"\"), layer?: string (default \"COTES_COURBES\"; created if missing), \
-                 draw?: bool (default true)} → {labelCount}.",
+                 default 10, \"regular\" mode), axis?: {a: [x,y], b: [x,y]} | {points: [[x,y], ...]} \
+                 (required for \"axis\" mode: one label wherever any segment of this axis - a single \
+                 a/b segment, or every segment of a longer polyline from `points` - crosses a contour), \
+                 decimals?: integer (default 2), height?: number (default TEXTSIZE), suffix?: string \
+                 (appended after the number, e.g. \" m\"; default \"\"), layer?: string (default \
+                 \"COTES_COURBES\"; created if missing), draw?: bool (default true)} → {labelCount}. \
+                 Every label's rotation is normalised to read left-to-right (never upside down), so \
+                 consecutive labels along the same contour face the same way regardless of which \
+                 direction its raw segments happen to run.",
             ),
+        CommandSpec::new("terrain.draw_axis", "Draw Axis", run_draw_axis).noundo().interactive(|_| Ok(Box::new(DrawAxisM::default()))).params(
+            "{} (typed/menu only: TERRAIN.DRAW_AXIS prompts for a sequence of axis points, finishing \
+                 on Enter or a double-click) → sets Session::axis_pick to the clicked polyline, for the \
+                 Dimension Contours dialog's \"Draw axis\" button to read back.",
+        ),
     ]
 }
 
@@ -389,6 +398,22 @@ fn chain_segments(mut remaining: Vec<(Vec2, Vec2)>) -> Vec<Vec<Vec2>> {
     chains
 }
 
+/// A label's rotation, kept within (-90°, 90°] of +X so text always reads left-to-right rather
+/// than upside down - the same raw segment direction and its reverse (`d` and `-d`) land on the
+/// same rotation, so consecutive labels along a contour face the same way regardless of which
+/// way `chain_segments`/`contours()` happened to order that particular segment or raw crossing.
+fn upright_rotation(d: Vec2) -> f64 {
+    let a = d.y.atan2(d.x);
+    if a > std::f64::consts::FRAC_PI_2 || a <= -std::f64::consts::FRAC_PI_2 {
+        // Flip by PI, then wrap back into (-PI, PI] - `atan2` never returns past that range, but
+        // `a + PI` can.
+        let flipped = a + std::f64::consts::PI;
+        if flipped > std::f64::consts::PI { flipped - 2.0 * std::f64::consts::PI } else { flipped }
+    } else {
+        a
+    }
+}
+
 /// Positions (and local direction, for the label's rotation) spaced `interval` apart along a
 /// chained contour, starting half an interval in so a short, isolated chain still gets one label
 /// near its middle rather than none.
@@ -407,7 +432,7 @@ fn labels_along_chain(chain: &[Vec2], interval: f64) -> Vec<(Vec2, f64)> {
         }
         while next_at <= acc + seg_len {
             let t = (next_at - acc) / seg_len;
-            out.push((w[0] + d * t, d.y.atan2(d.x)));
+            out.push((w[0] + d * t, upright_rotation(d)));
             next_at += interval;
         }
         acc += seg_len;
@@ -415,14 +440,99 @@ fn labels_along_chain(chain: &[Vec2], interval: f64) -> Vec<(Vec2, f64)> {
     out
 }
 
-fn axis_point(cmd: &str, p: &Value, which: &str) -> Result<Vec2> {
-    let v = p.get("axis").and_then(|o| o.get(which)).ok_or_else(|| bad(cmd, format!("`axis.{which}` ([x, y]) is required for `mode: \"axis\"`")))?;
-    let a = v.as_array().ok_or_else(|| bad(cmd, format!("`axis.{which}` must be an array [x, y]")))?;
-    let get = |k: usize| a.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
-    match (get(0), get(1)) {
-        (Some(x), Some(y)) => Ok(Vec2::new(x, y)),
-        _ => Err(bad(cmd, format!("`axis.{which}` must be [x, y] of finite numbers"))),
+/// The axis to cross contours against for `mode: "axis"`: either the original 2-point `axis.a`/
+/// `axis.b` form, or a longer hand-drawn polyline from `axis.points` (what TERRAIN.DRAW_AXIS
+/// leaves in `Session::axis_pick`) - every consecutive pair of points is one segment tested
+/// against every contour segment, so a multi-point axis crosses as many contours as it actually
+/// passes through, not just the two points a straight line would allow.
+fn axis_points(cmd: &str, p: &Value) -> Result<Vec<Vec2>> {
+    if let Some(arr) = p.get("axis").and_then(|o| o.get("points")).and_then(Value::as_array) {
+        let pts: Vec<Vec2> = arr
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let a = v.as_array().ok_or_else(|| bad(cmd, format!("axis.points[{i}] must be an array [x, y]")))?;
+                let get = |k: usize| a.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+                match (get(0), get(1)) {
+                    (Some(x), Some(y)) => Ok(Vec2::new(x, y)),
+                    _ => Err(bad(cmd, format!("axis.points[{i}] must be [x, y] of finite numbers"))),
+                }
+            })
+            .collect::<Result<_>>()?;
+        if pts.len() < 2 {
+            return Err(bad(cmd, "`axis.points` must have at least 2 points"));
+        }
+        return Ok(pts);
     }
+    let point = |which: &str| -> Result<Vec2> {
+        let v = p
+            .get("axis")
+            .and_then(|o| o.get(which))
+            .ok_or_else(|| bad(cmd, format!("`axis.{which}` ([x, y]) or `axis.points` ([[x, y], ...]) is required for `mode: \"axis\"`")))?;
+        let a = v.as_array().ok_or_else(|| bad(cmd, format!("`axis.{which}` must be an array [x, y]")))?;
+        let get = |k: usize| a.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+        match (get(0), get(1)) {
+            (Some(x), Some(y)) => Ok(Vec2::new(x, y)),
+            _ => Err(bad(cmd, format!("`axis.{which}` must be [x, y] of finite numbers"))),
+        }
+    };
+    Ok(vec![point("a")?, point("b")?])
+}
+
+/// TERRAIN.DRAW_AXIS: lets the Dimension Contours dialog's "Draw axis" button collect the axis
+/// on screen instead of typing its coordinates - a plain open polyline pick (at least 2 points),
+/// finishing on Enter (or a double-click, which the UI also sends as Enter while this command
+/// runs; see `canvas.rs`). The result never touches the drawing - it's left in
+/// [`Session::axis_pick`] for the dialog to read back and hand to `terrain.dimension_contours` as
+/// `axis.points`.
+#[derive(Default)]
+struct DrawAxisM {
+    pts: Vec<Vec2>,
+}
+
+impl Interactive for DrawAxisM {
+    fn name(&self) -> &'static str {
+        "TERRAINDRAWAXIS"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        let base = self.pts.last().copied();
+        let msg = if self.pts.is_empty() { "Specify first axis point" } else { "Specify next axis point (Enter to finish)" };
+        let pr = Prompt::new(msg, Accept::POINT).base_opt(base);
+        if self.pts.is_empty() { pr } else { pr.kw(&["Undo"]) }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match i {
+            Input::Point(pt) => {
+                self.pts.push(pt);
+                Ok(Step::Continue)
+            }
+            Input::Keyword(k) if k.eq_ignore_ascii_case("undo") => {
+                self.pts.pop();
+                Ok(Step::Continue)
+            }
+            Input::Enter => {
+                if self.pts.len() >= 2 {
+                    s.axis_pick = Some(std::mem::take(&mut self.pts));
+                    Ok(Step::Done)
+                } else {
+                    Ok(Step::Cancel)
+                }
+            }
+            Input::Cancel => Ok(Step::Cancel),
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, _s: &Session, cursor: Vec2) -> Vec<EntityKind> {
+        let mut pts = self.pts.clone();
+        pts.push(cursor);
+        pts.windows(2).map(|w| EntityKind::Line(Line { a: w[0].to3(0.0), b: w[1].to3(0.0) })).collect()
+    }
+}
+
+/// TERRAIN.DRAW_AXIS's non-interactive form: nothing to do headlessly, same convention as
+/// DATA.PICK_ENTITIES.
+fn run_draw_axis(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(bad("terrain.draw_axis", "draw the axis on screen (typed/menu only)"))
 }
 
 fn run_dimension_contours(s: &mut Session, p: &Value) -> Result<Value> {
@@ -463,15 +573,16 @@ fn run_dimension_contours(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         "axis" => {
-            let a = axis_point(CMD, p, "a")?;
-            let b = axis_point(CMD, p, "b")?;
-            let axis = GLine::new(a, b);
-            for (z, segs) in &by_level {
-                for (p0, p1) in segs {
-                    let seg = GLine::new(*p0, *p1);
-                    if let Some(pt) = line_line(&axis, &seg) {
-                        let d = *p1 - *p0;
-                        placements.push((pt, d.y.atan2(d.x), *z));
+            let axis_pts = axis_points(CMD, p)?;
+            for axis_seg in axis_pts.windows(2) {
+                let axis = GLine::new(axis_seg[0], axis_seg[1]);
+                for (z, segs) in &by_level {
+                    for (p0, p1) in segs {
+                        let seg = GLine::new(*p0, *p1);
+                        if let Some(pt) = line_line(&axis, &seg) {
+                            let d = *p1 - *p0;
+                            placements.push((pt, upright_rotation(d), *z));
+                        }
                     }
                 }
             }
@@ -593,10 +704,11 @@ fn run_contours(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use cadcraft_doc::{EntityKind, Line};
-    use cadcraft_geom::Vec3;
+    use cadcraft_geom::{Vec2, Vec3};
     use serde_json::{Value, json};
 
-    use crate::Session;
+    use super::{labels_along_chain, upright_rotation};
+    use crate::{Input, Session};
 
     fn session_with_doc() -> Session {
         let mut s = Session::new();
@@ -869,5 +981,78 @@ mod tests {
         let mut s = session_with_doc();
         let out = s.execute("terrain.dimension_contours", &json!({ "layers": [] }));
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn dimension_contours_axis_accepts_a_hand_drawn_polyline() {
+        let mut s = session_with_doc();
+        for (i, y) in [0.0, 1.0, 2.0].into_iter().enumerate() {
+            s.add_entity(EntityKind::Line(Line { a: Vec3::new(0.0, y, i as f64), b: Vec3::new(10.0, y, i as f64) })).unwrap();
+        }
+        // A bent axis: straight from (-1,-1) to (5,1.5) then up to (5,3), still crossing all 3
+        // lines exactly once each (the bend sits between y=1 and y=2, not on either line).
+        let out = s
+            .execute(
+                "terrain.dimension_contours",
+                &json!({ "layers": ["0"], "mode": "axis", "axis": { "points": [[-1.0, -1.0], [5.0, 1.5], [5.0, 3.0]] } }),
+            )
+            .expect("should succeed");
+        assert_eq!(out["labelCount"].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn dimension_contours_axis_rejects_a_single_point_polyline() {
+        let mut s = session_with_doc();
+        let out = s.execute("terrain.dimension_contours", &json!({ "layers": ["0"], "mode": "axis", "axis": { "points": [[0.0, 0.0]] } }));
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn upright_rotation_keeps_a_direction_and_its_reverse_the_same_way_up() {
+        let d = Vec2::new(-3.0, 1.0);
+        assert!((upright_rotation(d) - upright_rotation(-d)).abs() < 1e-9);
+        let rot = upright_rotation(d);
+        assert!(rot > -std::f64::consts::FRAC_PI_2 && rot <= std::f64::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn dimension_contours_regular_labels_face_the_same_way_along_a_reversed_chain() {
+        // Two chains covering the same geometry in opposite winding order should place labels at
+        // the same rotation, since `upright_rotation` folds a direction and its reverse together.
+        let chain_fwd = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.5)];
+        let chain_rev = vec![Vec2::new(10.0, 0.5), Vec2::new(0.0, 0.0)];
+        let fwd = labels_along_chain(&chain_fwd, 5.0);
+        let rev = labels_along_chain(&chain_rev, 5.0);
+        assert!(!fwd.is_empty() && !rev.is_empty());
+        assert!((fwd[0].1 - rev[0].1).abs() < 1e-9, "fwd={:?} rev={:?}", fwd[0].1, rev[0].1);
+    }
+
+    #[test]
+    fn draw_axis_rejected_headlessly_but_registered_as_interactive() {
+        let mut s = session_with_doc();
+        let out = s.execute("terrain.draw_axis", &json!({}));
+        assert!(out.is_err(), "no params form - it only runs interactively");
+    }
+
+    #[test]
+    fn draw_axis_collects_clicked_points_into_axis_pick_and_finishes_on_enter() {
+        let mut s = session_with_doc();
+        assert!(s.start("terrain.draw_axis").is_ok());
+        assert!(s.input(Input::Point(Vec2::new(0.0, 0.0))).is_ok());
+        assert!(s.input(Input::Point(Vec2::new(5.0, 5.0))).is_ok());
+        assert!(s.input(Input::Point(Vec2::new(10.0, 0.0))).is_ok());
+        assert!(s.input(Input::Enter).is_ok());
+        let pts = s.axis_pick.clone().expect("axis_pick set");
+        assert_eq!(pts, vec![Vec2::new(0.0, 0.0), Vec2::new(5.0, 5.0), Vec2::new(10.0, 0.0)]);
+        assert!(s.running.is_none(), "command finished");
+    }
+
+    #[test]
+    fn draw_axis_cancels_rather_than_finishing_with_fewer_than_two_points() {
+        let mut s = session_with_doc();
+        assert!(s.start("terrain.draw_axis").is_ok());
+        assert!(s.input(Input::Point(Vec2::new(0.0, 0.0))).is_ok());
+        let _ = s.input(Input::Enter);
+        assert!(s.axis_pick.is_none());
     }
 }
