@@ -10,9 +10,16 @@
 //! The byte layout of these objects isn't in any public DXF/DWG spec (it's an Autodesk Map
 //! proprietary extension); this reads it purely by pattern-matching bytes observed in real
 //! sample files (clean-room: no Autodesk documentation or software was consulted), and only
-//! recovers what that pattern-matching finds with confidence - text (`ClassChar`) field values
-//! matched to a table whose decoded name matches the entity's own layer. Numeric field types
-//! (`ClassLong`, `ClassReal`) aren't decoded yet and are left out rather than guessed.
+//! recovers what that pattern-matching finds with confidence: text (`ClassChar`) field values
+//! matched to a table whose decoded name matches the entity's own layer, and the table's first
+//! `ClassLong` field (in every real table seen so far, that field is `FeatId`) from a fixed byte
+//! offset in the record - confirmed against a real file's own Properties panel (`FeatId` shown
+//! there matched exactly). `ClassReal` fields (such as `Hauteur_GN`) are not stored as plain
+//! byte-aligned doubles the way `ClassLong` is a plain byte-aligned integer - a real sample's
+//! known value (`8.042`) does not appear anywhere in its record's bytes at any byte alignment, so
+//! they're very likely bit-packed (not byte-aligned) the way DWG's own `BD` fields are; decoding
+//! that would need more real samples to confirm a byte-to-bit mapping with the same confidence as
+//! the fields below, so it's left out rather than guessed.
 //!
 //! Failsafe throughout: a DWG that doesn't use this feature, or one whose bytes don't match the
 //! expected pattern, simply yields no attributes for the affected entities - never an error, let
@@ -133,11 +140,27 @@ fn parse_table(runs: &[String]) -> Option<Table> {
     if fields.is_empty() { None } else { Some(Table { name, fields }) }
 }
 
-/// Table-name comparison ignoring case and underscores, since this encoding can't represent
-/// underscores (an odd byte can never be a valid `code * 2`) and drops them from decoded names.
+/// Table-name comparison ignoring case, underscores and spaces, and tolerant of a decoded name
+/// that's a truncated/altered prefix of the real one: this encoding only represents the printable
+/// ASCII range (`b / 2` must land in `0x20..0x7f`), so a genuinely accented table name (seen in a
+/// real sample: a layer named "...Isolé" whose decoded `IRD_DSC_RECORD` name came back
+/// "...Isoli", the accented letter decoding to something else entirely) can't always come back
+/// byte-for-byte - matching is still safe here because it's always checked against the small set
+/// of tables actually declared in this document, not against arbitrary text.
 fn names_match(a: &str, b: &str) -> bool {
-    let norm = |s: &str| s.chars().filter(|c| *c != '_').collect::<String>().to_ascii_lowercase();
-    norm(a) == norm(b)
+    let norm = |s: &str| s.chars().filter(|c| *c != '_' && *c != ' ').collect::<String>().to_ascii_lowercase();
+    let (a, b) = (norm(a), norm(b));
+    if a == b {
+        return true;
+    }
+    // A real table/layer name is never this short, so a common-prefix match below this length is
+    // too likely to be a coincidence to trust.
+    const MIN_PREFIX_LEN: usize = 6;
+    let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    let shortest = a.chars().count().min(b.chars().count());
+    // Tolerate the last couple of characters differing (where an accented letter the encoding
+    // can't represent would land), not a mismatch anywhere earlier in the name.
+    common >= MIN_PREFIX_LEN && common + 2 >= shortest
 }
 
 /// Whether `s` looks like a real field value rather than binary noise that happened to decode to
@@ -160,6 +183,25 @@ fn type_name(doc: &CadDocument, h: acadrust::Handle) -> Option<&str> {
         ObjectType::Unknown { type_name, .. } => Some(type_name.as_str()),
         _ => None,
     }
+}
+
+/// Byte offset, within an `IRD_OBJ_RECORD`'s raw bytes, of the table's first `ClassLong` field
+/// (`FeatId` in every real table seen so far), stored as a 4-byte little-endian integer doubled
+/// the same way a character is (`value * 2`) - reverse-engineered from, and confirmed exactly
+/// against, a real sample file's own AutoCAD Properties panel (`FeatId = 3`).
+const LONG_FIELD_OFFSET: usize = 18;
+
+/// Reads the table's first `ClassLong` field from `data`, when the fixed-position bytes are
+/// present and even (the same validity check every other field in this format relies on - an odd
+/// byte can never be a valid `value * 2`, so this simply yields nothing rather than a wrong number
+/// on a record this offset doesn't apply to).
+fn long_field(data: &[u8]) -> Option<u32> {
+    let bytes: [u8; 4] = data.get(LONG_FIELD_OFFSET..LONG_FIELD_OFFSET + 4)?.try_into().ok()?;
+    let raw = u32::from_le_bytes(bytes);
+    if !raw.is_multiple_of(2) {
+        return None;
+    }
+    Some(raw / 2)
 }
 
 /// Every table found anywhere in the document (there is normally one `IRD_DSC_DICT` holding all
@@ -190,18 +232,23 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
         let Some(ObjectType::Dictionary(d)) = doc.objects.get(&xdict) else { continue };
         let Some(table) = tables.iter().find(|t| names_match(&t.name, &common.layer)) else { continue };
         let text_fields: Vec<&Field> = table.fields.iter().filter(|f| f.kind.contains("Char")).collect();
-        if text_fields.is_empty() {
+        let long_field_name = table.fields.iter().find(|f| f.kind.contains("Long")).map(|f| f.name.clone());
+        if text_fields.is_empty() && long_field_name.is_none() {
             continue;
         }
         // Every IRD_OBJ_RECORD under this entity's extension dictionary, in dictionary order; a
         // real file has one or two, but there's no fixed bound from the format itself, so this is
         // simply bounded by the dictionary's own (small) entry count.
         let mut values: Vec<String> = Vec::new();
+        let mut long_value: Option<u32> = None;
         for (_, child) in &d.entries {
             if type_name(doc, *child) != Some("IRD_OBJ_RECORD") {
                 continue;
             }
             let Some(data) = raw_bytes(doc, *child) else { continue };
+            if long_value.is_none() {
+                long_value = long_field(data);
+            }
             for run in text_runs(data) {
                 // Field/type/marker words from the schema itself can also match as runs inside an
                 // OBJ_RECORD (the record embeds the class name); skip anything that's a known
@@ -216,7 +263,7 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
                 }
             }
         }
-        if values.is_empty() {
+        if values.is_empty() && long_value.is_none() {
             continue;
         }
         // Only trust the schema's field order (and so its field names) when every text field
@@ -224,11 +271,14 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
         // missing from the middle would silently shift every name after it onto the wrong value.
         // Short of locating each value's exact field within the record's binary layout (not
         // decoded yet - see the module doc), a generic, still-truthful label beats a wrong name.
-        let fields: Vec<(String, String)> = if values.len() == text_fields.len() {
+        let mut fields: Vec<(String, String)> = if values.len() == text_fields.len() {
             text_fields.iter().zip(values.iter()).map(|(f, v)| (f.name.clone(), v.clone())).collect()
         } else {
             values.iter().enumerate().map(|(i, v)| (format!("Attribut {}", i + 1), v.clone())).collect()
         };
+        if let (Some(name), Some(v)) = (long_field_name, long_value) {
+            fields.insert(0, (name, v.to_string()));
+        }
         if !fields.is_empty() {
             out.insert(common.handle.value(), (table.name.clone(), fields));
         }
@@ -303,6 +353,31 @@ mod tests {
         assert!(names_match("Ouverturesarcheo", "Ouvertures_archeo"));
         assert!(!names_match("Topo", "Ouvertures_archeo"));
     }
+
+    #[test]
+    fn names_match_tolerates_an_accented_letter_the_encoding_cant_represent() {
+        // Real sample: layer "Mobilier_Isolé", decoded schema name "Mobilier_Isoli" (the accented
+        // "é" came back as something else).
+        assert!(names_match("Mobilier_Isoli", "Mobilier_Isolé"));
+        // But short, unrelated names don't spuriously prefix-match.
+        assert!(!names_match("Num", "Nature"));
+    }
+
+    #[test]
+    fn long_field_decodes_a_doubled_little_endian_u32() {
+        let mut data = vec![0u8; LONG_FIELD_OFFSET];
+        data.extend_from_slice(&6u32.to_le_bytes()); // FeatId 3, stored doubled.
+        assert_eq!(long_field(&data), Some(3));
+    }
+
+    #[test]
+    fn long_field_on_odd_or_short_data_is_none_not_a_panic() {
+        let mut odd = vec![0u8; LONG_FIELD_OFFSET];
+        odd.extend_from_slice(&7u32.to_le_bytes());
+        assert_eq!(long_field(&odd), None);
+        assert_eq!(long_field(&[0u8; 4]), None);
+        assert_eq!(long_field(&[]), None);
+    }
 }
 
 /// A regression test against a real `IRD_DSC_RECORD`'s bytes (one table definition from a real
@@ -330,5 +405,19 @@ mod real_sample_regression {
         let names: Vec<&str> = t.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["FeatId", "Num"]);
         assert_eq!(t.fields[1].kind, "ClassChar");
+    }
+
+    /// A real `IRD_OBJ_RECORD` for a "Mobilier_Isolé" point, whose AutoCAD Properties panel
+    /// showed `FeatId = 3` and `Num = 2909` for this exact object - both recovered here.
+    const MOBILIER_ISOLE_OBJ_RECORD: &[u8] = &[
+        3, 0, 152, 0, 64, 0, 0, 128, 72, 164, 6, 2, 1, 32, 50, 60, 2, 0, 6, 0, 0, 0, 100, 0, 114, 0, 96, 0, 114, 0, 0, 0, 0, 0, 0, 0, 95, 186, 72,
+        13, 2, 42, 64, 128, 128, 66, 1, 33, 65, 155,
+    ];
+
+    #[test]
+    fn decodes_feat_id_and_num_from_a_real_obj_record() {
+        assert_eq!(long_field(MOBILIER_ISOLE_OBJ_RECORD), Some(3));
+        let runs = text_runs(MOBILIER_ISOLE_OBJ_RECORD);
+        assert!(runs.contains(&"2909".to_string()));
     }
 }
