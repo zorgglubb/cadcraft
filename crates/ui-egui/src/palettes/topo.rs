@@ -1,6 +1,8 @@
-//! The "Topo" Tool Sets tab: a thin face on `crates/engine/src/cmd/foncier.rs`'s
-//! Foncier/Parcellaire commands and the Land Records (EDIGEO) importer, grouped the way
-//! Covadis groups its own ribbon (one tab per subject, not one menu item per command).
+//! A thin face on `crates/engine/src/cmd/foncier.rs`'s Foncier/Parcellaire commands and the Land
+//! Records (EDIGEO) importer, grouped the way Covadis groups its own ribbon (one tab per subject,
+//! not one menu item per command). Shown under the "Plan" Tool Sets tab's own command grid
+//! (`palettes.rs`'s `toolsets`), underneath its `PLAN` icon buttons - it predates that tab's own
+//! command grid and doesn't fit the same plain-icon shape (a running file list, inline results).
 //!
 //! **Scope, stated plainly**: this is a face for the commands that already exist, not a new
 //! workflow of its own. `topo.merge_parcels` needs an object selection the same way MOVE or

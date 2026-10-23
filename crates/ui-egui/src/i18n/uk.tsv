@@ -1438,6 +1438,7 @@
 	Import Shapefile (SHP)	Імпорт Shapefile (SHP)
 	Export Shapefile (SHP)	Експорт Shapefile (SHP)
 	Set Shapefile Attribute	Встановити атрибут Shapefile
+	Shapefile	Shapefile
 	Attributes	Атрибути
 	Attribute Table	Таблиця атрибутів
 	External Data	Зовнішні дані
@@ -1482,7 +1483,9 @@
 	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Попередній перегляд: {w}×{h} мм на папері, {crosses} хрест(ів)
 	Create	Створити
 	Carroyage created in layout {layout} on layer {layer}	Карройяж створено на презентації {layout}, шар {layer}
+	Grid	Сітка
 	Data	Дані
+	Attribute Tables	Таблиці атрибутів
 	Attribute Table...	Таблиця атрибутів...
 	Assign Table...	Призначити таблицю...
 	Remove Table...	Видалити таблицю...

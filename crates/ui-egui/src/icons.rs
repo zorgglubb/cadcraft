@@ -144,6 +144,8 @@ pub enum Icon {
     PickAdd,
     SelectObjects,
     QuickSelect,
+    Plan,
+    Data,
 }
 
 struct Pen<'a> {
@@ -904,6 +906,19 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
             // A filter funnel with a spark.
             pen.poly(&[(3.0, 4.0), (19.0, 4.0), (13.0, 11.0), (13.0, 19.0), (9.0, 17.0), (9.0, 11.0)], true, b);
             pen.poly(&[(20.0, 10.0), (16.5, 15.5), (20.0, 15.5), (17.0, 21.0)], false, a);
+        }
+        Plan => {
+            // A site plan sheet: a page with a parcel boundary and its survey point.
+            pen.rect(3.0, 3.0, 18.0, 18.0, b);
+            pen.poly(&[(6.5, 16.0), (9.0, 7.5), (16.5, 8.5), (18.0, 16.5), (11.0, 18.5)], true, a);
+            pen.dot(9.0, 7.5);
+        }
+        Data => {
+            // An attribute tag: a pointed label with a punch hole and two field lines.
+            pen.poly(&[(3.0, 12.0), (9.0, 3.5), (21.0, 3.5), (21.0, 20.5), (9.0, 20.5)], true, b);
+            pen.c(9.3, 12.0, 1.6, a);
+            pen.la(12.5, 9.0, 18.0, 9.0);
+            pen.la(12.5, 15.0, 18.0, 15.0);
         }
     }
 }

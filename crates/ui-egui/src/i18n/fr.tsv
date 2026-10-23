@@ -1116,6 +1116,7 @@
 	Import Shapefile (SHP)	Importer Shapefile (SHP)
 	Export Shapefile (SHP)	Exporter en SHP
 	Set Shapefile Attribute	Définir un attribut Shapefile
+	Shapefile	Shapefile
 	Attributes	Attributs
 	Attribute Table	Table d'attributs
 	External Data	Données externes
@@ -1160,7 +1161,9 @@
 	Preview: {w}×{h} mm on paper, {crosses} cross(es)	Aperçu : {w}×{h} mm sur papier, {crosses} croix
 	Create	Créer
 	Carroyage created in layout {layout} on layer {layer}	Carroyage créé dans la présentation {layout}, calque {layer}
+	Grid	Grille
 	Data	Données
+	Attribute Tables	Tables d'attributs
 	Attribute Table...	Table d'attributs...
 	Assign Table...	Attribuer la table...
 	Remove Table...	Enlever la table...

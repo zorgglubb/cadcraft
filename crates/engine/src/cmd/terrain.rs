@@ -34,13 +34,13 @@ const DEFAULT_CONTOUR_LABEL_LAYER: &str = "COTES_COURBES";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("terrain.triangulate", "Triangulate (TIN)", run_triangulate)
-            .menu(&["Topo 3D", "TIN", "Triangulate"])
+            .menu(&["Topo 3D", "Triangulate (TIN)"])
             .params("{points: [[x,y,z], ...], draw?: bool}"),
         CommandSpec::new("terrain.elevation_at", "Elevation At Point", run_elevation_at)
-            .menu(&["Topo 3D", "TIN", "Elevation At Point"])
+            .menu(&["Topo 3D", "Elevation At Point"])
             .params("{points: [[x,y,z], ...], x: number, y: number}"),
         CommandSpec::new("terrain.contours", "Contour Lines", run_contours)
-            .menu(&["Topo 3D", "TIN", "Contour Lines"])
+            .menu(&["Topo 3D", "Contour Lines"])
             .alias(&["courbes"])
             .params("{points: [[x,y,z], ...], interval: number, draw?: bool}"),
         CommandSpec::new("terrain.create_mnt", "Create MNT...", run_create_mnt).menu(&["Topo 3D", "Create MNT..."]).params(

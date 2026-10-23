@@ -13,7 +13,7 @@ use crate::theme::Tokens;
 pub mod patterns;
 /// The QuickCalc palette.
 pub mod quickcalc;
-/// The "Topo" Tool Sets tab (Foncier / Référentiel fonds EDIGEO).
+/// Foncier / Référentiel fonds EDIGEO, shown under the "Plan" Tool Sets tab's own command grid.
 pub mod topo;
 
 type Tool = (Icon, &'static str, &'static str);
@@ -131,23 +131,31 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
     egui::Frame::NONE.fill(t.panel).show(ui, |ui| {
         let r = ui.max_rect();
         let p = ui.painter().clone();
-        // Tabs.
+        // Tabs. "Plan" and "Data" carry their own icon (land-plan/attribute-tag) ahead of the
+        // label; the original two stay text-only.
         let tab_h = 28.0;
         let mut x = r.left();
-        for name in ["Drafting", "Modeling", "Topo"] {
-            let w = 92.0;
+        for name in ["Drafting", "Modeling", "Plan", "Data"] {
+            let icon = match name {
+                "Plan" => Some(Icon::Plan),
+                "Data" => Some(Icon::Data),
+                _ => None,
+            };
+            let w = if icon.is_some() { 92.0 } else { 80.0 };
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, tab_h));
             let active = app.ui.toolset_tab == name;
             let resp = ui.interact(tr, ui.id().with(("ts", name)), Sense::click());
             p.rect_filled(tr, 0.0, if active { t.tab_active } else { t.chrome });
-            p.text(
-                tr.center(),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::t(name),
-                egui::FontId::proportional(13.5),
-                if active { t.text } else { t.text_dim },
-            );
-            icons::describe_control(ui, &resp, crate::i18n::t(name), Some(active), true);
+            let label = crate::i18n::t(name);
+            let text_color = if active { t.text } else { t.text_dim };
+            if let Some(icon) = icon {
+                let ir = Rect::from_center_size(pos2(tr.left() + 20.0, tr.center().y), vec2(16.0, 16.0));
+                icons::paint(&p, ir, icon, !active);
+                p.text(pos2(tr.left() + 32.0, tr.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(13.5), text_color);
+            } else {
+                p.text(tr.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.5), text_color);
+            }
+            icons::describe_control(ui, &resp, label, Some(active), true);
             if resp.clicked() {
                 app.ui.toolset_tab = name.into();
             }
@@ -166,16 +174,15 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         let mut toggle_group = None;
         let mut tool_visible: Option<(String, bool)> = None;
         let mut restore: Vec<String> = Vec::new();
-        if app.ui.toolset_tab == "Topo" {
-            ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| topo::show(app, ui));
-            });
-            return;
-        }
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                let groups: &[(&str, &[Tool], &[Tool])] = if app.ui.toolset_tab == "Drafting" { DRAFTING } else { MODELING };
+                let groups: &[(&str, &[Tool], &[Tool])] = match app.ui.toolset_tab.as_str() {
+                    "Drafting" => DRAFTING,
+                    "Modeling" => MODELING,
+                    "Data" => DATA,
+                    _ => PLAN,
+                };
                 for (name, large, small) in groups {
                     let collapsed = app.ui.collapsed_groups.iter().any(|g| g == name);
                     // Header.
@@ -256,6 +263,14 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
                     let (sr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
                     ui.painter().hline(sr.x_range().shrink(6.0), sr.center().y, Stroke::new(1.0, t.border));
                 }
+                // Foncier/EDIGEO (`topo::show`) doesn't fit the plain icon-grid shape above (a
+                // running file list, inline results) - the "Plan" tab carries it underneath its
+                // own command grid rather than dropping it when the tab that used to be "Topo"
+                // was renamed.
+                if app.ui.toolset_tab == "Plan" {
+                    ui.add_space(4.0);
+                    topo::show(app, ui);
+                }
             });
         });
         if let Some((cmd, shown)) = tool_visible {
@@ -295,6 +310,32 @@ pub const MODELING: &[(&str, &[Tool], &[Tool])] = &[
     ),
     ("Boolean", &[(Icon::Join, "union", "Union"), (Icon::Trim, "subtract", "Subtract"), (Icon::Region, "intersect", "Intersect")], &[]),
     ("View", &[(Icon::Orbit, "3dorbit", "Orbit"), (Icon::ZoomExtents, "zoom.extents", "Zoom Extents")], &[]),
+];
+
+/// The "Plan" Tool Sets tab: the `cmd::plan` menu's own commands (georeferencing, raster images,
+/// Shapefile exchange) - Foncier/EDIGEO, the tab's own content before it was renamed from "Topo",
+/// still shows underneath (`topo::show`, called directly by `toolsets` since it doesn't fit this
+/// plain icon-grid shape).
+pub const PLAN: &[(&str, &[Tool], &[Tool])] = &[
+    (
+        "Coordinate System",
+        &[(Icon::Gear, "plan.set_crs", "Assign Coordinate System"), (Icon::Properties, "plan.convert_crs", "Convert Coordinate System")],
+        &[],
+    ),
+    ("Image", &[(Icon::Import, "plan.import_image", "Import Image (Worldfile)")], &[]),
+    ("Shapefile", &[(Icon::Import, "plan.import_shp", "Import Shapefile (SHP)"), (Icon::Export, "plan.export_shp", "Export Shapefile (SHP)")], &[]),
+    ("Grid", &[(Icon::Grid, "plan.carroyage", "Carroyage")], &[]),
+];
+
+/// The "Data" Tool Sets tab: `cmd::data`'s user-defined attribute tables (also where a DWG's own
+/// recovered Object Data, and a Shapefile import's fields, are found - see `data.search`).
+pub const DATA: &[(&str, &[Tool], &[Tool])] = &[
+    (
+        "Attribute Tables",
+        &[(Icon::Table, "data.new_table", "Attribute Table..."), (Icon::AttDef, "data.assign_table", "Assign Table...")],
+        &[(Icon::Erase, "data.remove_table", "Remove Table...")],
+    ),
+    ("Search", &[(Icon::Search, "data.search", "Search...")], &[]),
 ];
 
 fn section_header(ui: &mut egui::Ui, title: &str) -> Rect {
