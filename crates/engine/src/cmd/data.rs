@@ -16,11 +16,13 @@
 //! [`Session::table_pick`].
 //!
 //! DATA.SEARCH and DATA.REMOVE_TABLE both look past this module's own tables, too: an entity a
-//! Shapefile import tagged (`cadcraft_doc::import_attrs::SHP_APPID`, `plan.import_shp`) carries
-//! the exact same shape of data (a table name plus field/value pairs), just with no declared
-//! schema - [`entity_table`] reads whichever of the two tagged it, and [`shp_table_defs`]
-//! synthesizes a schema for the Shapefile ones (every field `character`) so they can appear
-//! alongside the user-defined ones wherever a table needs listing.
+//! Shapefile import tagged (`cadcraft_doc::import_attrs::SHP_APPID`, `plan.import_shp`), or a DWG
+//! whose Autodesk Map 3D "Object Data" was recovered on open (`cadcraft_doc::import_attrs::
+//! DWG_MAP_APPID`, `cadcraft_io`'s DWG reader), carries the exact same shape of data (a table
+//! name plus field/value pairs), just with no declared schema - [`entity_table`] reads whichever
+//! of the three tagged it, and [`shp_table_defs`] synthesizes a schema for the Shapefile and DWG
+//! Map ones (every field `character`) so they can appear, and be searched, alongside the
+//! user-defined ones wherever a table needs listing.
 
 use cadcraft_doc::{AttributeField, AttributeFieldKind, AttributeTableDef, Handle};
 use serde_json::{Value, json};
@@ -150,15 +152,18 @@ fn run_list_tables(s: &mut Session, p: &Value) -> Result<Value> {
 const MAX_ENTITIES_SCANNED: usize = 200_000;
 
 /// The table (and its field values) an entity carries, whichever mechanism tagged it: a
-/// user-defined attribute table ([`ATTR_TABLE_APPID`]) or a Shapefile import
-/// (`cadcraft_doc::import_attrs::SHP_APPID`, from `plan.import_shp`).
+/// user-defined attribute table ([`ATTR_TABLE_APPID`]), a Shapefile import
+/// (`cadcraft_doc::import_attrs::SHP_APPID`, from `plan.import_shp`), or a DWG's recovered
+/// Autodesk Map 3D "Object Data" (`cadcraft_doc::import_attrs::DWG_MAP_APPID`).
 fn entity_table(e: &cadcraft_doc::Entity) -> Option<(String, Vec<(String, String)>)> {
-    cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID).or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID))
+    cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID)
+        .or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID))
+        .or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::DWG_MAP_APPID))
 }
 
-/// One synthetic [`AttributeTableDef`] per distinct Shapefile import still present in the
-/// drawing (field names taken from the first tagged entity found for that table; every field is
-/// reported as `character` since the Shapefile mechanism keeps no field types of its own).
+/// One synthetic [`AttributeTableDef`] per distinct Shapefile import or DWG Map table still
+/// present in the drawing (field names taken from the first tagged entity found for that table;
+/// every field is reported as `character` since neither mechanism keeps field types of its own).
 fn shp_table_defs(d: &cadcraft_doc::Drawing) -> Vec<AttributeTableDef> {
     use std::collections::BTreeMap;
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -170,10 +175,12 @@ fn shp_table_defs(d: &cadcraft_doc::Drawing) -> Vec<AttributeTableDef> {
             if scanned > MAX_ENTITIES_SCANNED {
                 break 'entities;
             }
-            if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID)
-                && !found.contains_key(&table)
-            {
-                found.insert(table, fields.into_iter().map(|(k, _)| k).collect());
+            for appid in [cadcraft_doc::import_attrs::SHP_APPID, cadcraft_doc::import_attrs::DWG_MAP_APPID] {
+                if let Some((table, fields)) = cadcraft_doc::import_attrs::fields(e, appid)
+                    && !found.contains_key(&table)
+                {
+                    found.insert(table, fields.into_iter().map(|(k, _)| k).collect());
+                }
             }
         }
     }
@@ -221,8 +228,13 @@ fn run_remove_table(s: &mut Session, p: &Value) -> Result<Value> {
         hs.iter()
             .copied()
             .filter(|h| {
-                d.entity(*h)
-                    .and_then(|e| entity_table(e))
+                let Some(e) = d.entity(*h) else { return false };
+                // DWG Map Object Data (`DWG_MAP_APPID`) is read-only - recovered from the file,
+                // not something the person authored here - so it's excluded here even though
+                // `entity_table` (used for *finding*/searching it) matches it: clearing it would
+                // also clear this entity's other xdata appended after the tag (see `cadcraft_io`).
+                cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID)
+                    .or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID))
                     .is_some_and(|(table, _)| name_filter.as_ref().is_none_or(|n| n.eq_ignore_ascii_case(&table)))
             })
             .collect()
@@ -455,6 +467,49 @@ mod tests {
         assert_eq!(out["removed"].as_u64(), Some(1));
         let e1 = s.doc().unwrap().entity(cadcraft_doc::Handle::parse_hex(&h1).unwrap()).unwrap();
         assert!(cadcraft_doc::import_attrs::fields(e1, ATTR_TABLE_APPID).is_none());
+    }
+
+    /// Tags `h` as a point carrying recovered DWG Map "Object Data", the same way `cadcraft_io`'s
+    /// DWG reader does (`cadcraft_doc::import_attrs::DWG_MAP_APPID`).
+    fn tag_as_dwg_map(s: &mut Session, h: &str, table: &str, fields: &[(&str, &str)]) {
+        let xdata = cadcraft_doc::import_attrs::tag_fields(
+            cadcraft_doc::import_attrs::DWG_MAP_APPID,
+            table,
+            &fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>(),
+        );
+        s.doc_mut().unwrap().modify_entity(cadcraft_doc::Handle::parse_hex(h).unwrap(), |e| e.common.xdata = xdata).unwrap();
+    }
+
+    #[test]
+    fn search_finds_recovered_dwg_map_attributes_too() {
+        let mut s = session_with_doc();
+        let h = s.execute("point", &json!({ "at": [0.0, 0.0] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+        tag_as_dwg_map(&mut s, &h, "Mobilier_Isolé", &[("FeatId", "3"), ("Num", "2909")]);
+
+        let out = s.execute("data.search", &json!({ "query": "2909" })).expect("should search");
+        let rows = out["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["table"], "Mobilier_Isolé");
+
+        // Also listed as a searchable table, same as a Shapefile import.
+        let tables = s.execute("data.list_tables", &json!({ "includeShp": true })).unwrap();
+        let names: Vec<&str> = tables["tables"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"Mobilier_Isolé"));
+    }
+
+    #[test]
+    fn remove_table_never_touches_dwg_map_attributes() {
+        // They're recovered from the file, not authored here - read-only (see the Properties
+        // palette's "Attributes" section) - so DATA.REMOVE_TABLE must leave them alone even
+        // though DATA.SEARCH finds them.
+        let mut s = session_with_doc();
+        let h = s.execute("point", &json!({ "at": [0.0, 0.0] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+        tag_as_dwg_map(&mut s, &h, "Mobilier_Isolé", &[("FeatId", "3")]);
+
+        let out = s.execute("data.remove_table", &json!({ "handles": [h.clone()] })).expect("should run, just remove nothing");
+        assert_eq!(out["removed"].as_u64(), Some(0));
+        let e = s.doc().unwrap().entity(cadcraft_doc::Handle::parse_hex(&h).unwrap()).unwrap();
+        assert!(cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::DWG_MAP_APPID).is_some(), "still tagged");
     }
 
     #[test]

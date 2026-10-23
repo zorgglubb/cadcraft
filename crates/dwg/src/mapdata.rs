@@ -10,16 +10,15 @@
 //! The byte layout of these objects isn't in any public DXF/DWG spec (it's an Autodesk Map
 //! proprietary extension); this reads it purely by pattern-matching bytes observed in real
 //! sample files (clean-room: no Autodesk documentation or software was consulted), and only
-//! recovers what that pattern-matching finds with confidence: text (`ClassChar`) field values
-//! matched to a table whose decoded name matches the entity's own layer, and the table's first
-//! `ClassLong` field (in every real table seen so far, that field is `FeatId`) from a fixed byte
-//! offset in the record - confirmed against a real file's own Properties panel (`FeatId` shown
-//! there matched exactly). `ClassReal` fields (such as `Hauteur_GN`) are not stored as plain
-//! byte-aligned doubles the way `ClassLong` is a plain byte-aligned integer - a real sample's
-//! known value (`8.042`) does not appear anywhere in its record's bytes at any byte alignment, so
-//! they're very likely bit-packed (not byte-aligned) the way DWG's own `BD` fields are; decoding
-//! that would need more real samples to confirm a byte-to-bit mapping with the same confidence as
-//! the fields below, so it's left out rather than guessed.
+//! recovers what that pattern-matching finds: text (`ClassChar`) field values matched to a table
+//! whose decoded name matches the entity's own layer, the table's first `ClassLong` field (in
+//! every real table seen so far, that field is `FeatId`) from a fixed byte offset in the record,
+//! and the table's first `ClassReal` field - both numeric kinds confirmed against a real file's
+//! own Properties panel (`FeatId = 3`, `Hauteur_GN = 8.042` on the same object).
+//!
+//! The `ClassReal` decoding is weaker than the other two and is approximate on purpose - see
+//! [`real_field`]'s doc comment for why - unlike the rest of this module, which never shows a
+//! value it isn't confident is exactly right.
 //!
 //! Failsafe throughout: a DWG that doesn't use this feature, or one whose bytes don't match the
 //! expected pattern, simply yields no attributes for the affected entities - never an error, let
@@ -204,6 +203,55 @@ fn long_field(data: &[u8]) -> Option<u32> {
     Some(raw / 2)
 }
 
+/// Lowest magnitude a decoded `ClassReal` value is accepted at - tuned to real-world survey/
+/// archaeology measurements (heights, elevations, areas), not general numbers.
+const REAL_FIELD_MIN: f64 = 1e-4;
+/// Highest magnitude a decoded `ClassReal` value is accepted at (same reasoning as
+/// [`REAL_FIELD_MIN`]).
+const REAL_FIELD_MAX: f64 = 1e6;
+
+/// Reads the table's first `ClassReal` field from `data` - **approximately**: this value's own
+/// bytes are doubled the same way every other value in this format is (`byte = (value * 2) %
+/// 256`), but unlike a character's byte (always < 0x80, so doubling it never wraps) or
+/// [`LONG_FIELD_OFFSET`]'s small integer (confirmed to never exceed one byte in every real sample
+/// seen), an arbitrary byte of an IEEE-754 double routinely needs its top bit set, and doubling
+/// that wraps - permanently losing exactly that bit. Recovering it isn't possible from this byte
+/// alone; this always resolves the ambiguity by assuming the bit was unset (true byte < 0x80),
+/// which was confirmed, by brute-forcing every 2^8 combination against a real file's own
+/// Properties panel (`Hauteur_GN = 8.042`), to recover the real value's two most significant
+/// bytes (the ones that set its order of magnitude) exactly - but for the remaining, lower-order
+/// bytes (which only affect its later decimal digits) that same file needed the opposite
+/// assumption for two of them, so the fractional digits here can be slightly off (confirmed
+/// example: this decodes that same record to `8.041`, not `8.042`).
+///
+/// Since the field's exact byte offset isn't fixed the way [`LONG_FIELD_OFFSET`] is (it depends
+/// on how long the record's preceding text fields are), this scans backward from the end of the
+/// record (the field was found just before a short, fixed-shape trailer) for the first 8-byte
+/// window whose doubled-bytes-undone decoding is a plausible measurement
+/// ([`REAL_FIELD_MIN`]..[`REAL_FIELD_MAX`], always positive by the assumption above) - bounded by
+/// the record's own (small) length, never by [`MAX_SCAN_BYTES`]. Every other field in this format
+/// starts at an even offset, so only even offsets are tried: on the real sample this was
+/// confirmed against, the very next (odd) offset also happens to decode to a finite,
+/// plausible-looking number (pure coincidence - one wrong byte of a double can still look like a
+/// valid measurement), so without this, the scan finds that one first and never reaches the real
+/// field at all.
+fn real_field(data: &[u8]) -> Option<f64> {
+    if data.len() < 8 {
+        return None;
+    }
+    for start in (0..=data.len() - 8).rev().filter(|s| s % 2 == 0) {
+        let mut bytes = [0u8; 8];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = data[start + i] / 2;
+        }
+        let v = f64::from_le_bytes(bytes);
+        if v.is_finite() && (REAL_FIELD_MIN..REAL_FIELD_MAX).contains(&v) {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// Every table found anywhere in the document (there is normally one `IRD_DSC_DICT` holding all
 /// of them, but this doesn't assume that - any `IRD_DSC_RECORD` in the file is tried).
 fn schema(doc: &CadDocument) -> Vec<Table> {
@@ -233,7 +281,8 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
         let Some(table) = tables.iter().find(|t| names_match(&t.name, &common.layer)) else { continue };
         let text_fields: Vec<&Field> = table.fields.iter().filter(|f| f.kind.contains("Char")).collect();
         let long_field_name = table.fields.iter().find(|f| f.kind.contains("Long")).map(|f| f.name.clone());
-        if text_fields.is_empty() && long_field_name.is_none() {
+        let real_field_name = table.fields.iter().find(|f| f.kind.contains("Real")).map(|f| f.name.clone());
+        if text_fields.is_empty() && long_field_name.is_none() && real_field_name.is_none() {
             continue;
         }
         // Every IRD_OBJ_RECORD under this entity's extension dictionary, in dictionary order; a
@@ -241,6 +290,7 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
         // simply bounded by the dictionary's own (small) entry count.
         let mut values: Vec<String> = Vec::new();
         let mut long_value: Option<u32> = None;
+        let mut real_value: Option<f64> = None;
         for (_, child) in &d.entries {
             if type_name(doc, *child) != Some("IRD_OBJ_RECORD") {
                 continue;
@@ -248,6 +298,9 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
             let Some(data) = raw_bytes(doc, *child) else { continue };
             if long_value.is_none() {
                 long_value = long_field(data);
+            }
+            if real_value.is_none() && real_field_name.is_some() {
+                real_value = real_field(data);
             }
             for run in text_runs(data) {
                 // Field/type/marker words from the schema itself can also match as runs inside an
@@ -263,7 +316,7 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
                 }
             }
         }
-        if values.is_empty() && long_value.is_none() {
+        if values.is_empty() && long_value.is_none() && real_value.is_none() {
             continue;
         }
         // Only trust the schema's field order (and so its field names) when every text field
@@ -276,6 +329,11 @@ pub fn map_attributes(doc: &CadDocument) -> MapAttributes {
         } else {
             values.iter().enumerate().map(|(i, v)| (format!("Attribut {}", i + 1), v.clone())).collect()
         };
+        // "≈" flags this one as approximate (see `real_field`'s doc comment) - everything else
+        // here is exact.
+        if let (Some(name), Some(v)) = (real_field_name, real_value) {
+            fields.push((name, format!("≈{v:.3}")));
+        }
         if let (Some(name), Some(v)) = (long_field_name, long_value) {
             fields.insert(0, (name, v.to_string()));
         }
@@ -378,6 +436,14 @@ mod tests {
         assert_eq!(long_field(&[0u8; 4]), None);
         assert_eq!(long_field(&[]), None);
     }
+
+    #[test]
+    fn real_field_on_short_or_implausible_data_is_none_not_a_panic() {
+        assert_eq!(real_field(&[]), None);
+        assert_eq!(real_field(&[0u8; 7]), None);
+        // All-zero bytes decode to 0.0, outside the accepted (nonzero) magnitude range.
+        assert_eq!(real_field(&[0u8; 16]), None);
+    }
 }
 
 /// A regression test against a real `IRD_DSC_RECORD`'s bytes (one table definition from a real
@@ -408,7 +474,7 @@ mod real_sample_regression {
     }
 
     /// A real `IRD_OBJ_RECORD` for a "Mobilier_Isolé" point, whose AutoCAD Properties panel
-    /// showed `FeatId = 3` and `Num = 2909` for this exact object - both recovered here.
+    /// showed `FeatId = 3`, `Num = 2909` and `Hauteur_GN = 8.042` for this exact object.
     const MOBILIER_ISOLE_OBJ_RECORD: &[u8] = &[
         3, 0, 152, 0, 64, 0, 0, 128, 72, 164, 6, 2, 1, 32, 50, 60, 2, 0, 6, 0, 0, 0, 100, 0, 114, 0, 96, 0, 114, 0, 0, 0, 0, 0, 0, 0, 95, 186, 72,
         13, 2, 42, 64, 128, 128, 66, 1, 33, 65, 155,
@@ -419,5 +485,13 @@ mod real_sample_regression {
         assert_eq!(long_field(MOBILIER_ISOLE_OBJ_RECORD), Some(3));
         let runs = text_runs(MOBILIER_ISOLE_OBJ_RECORD);
         assert!(runs.contains(&"2909".to_string()));
+    }
+
+    #[test]
+    fn real_field_approximates_the_real_value_within_its_known_margin() {
+        // The real value is 8.042; this format's lost-high-bit ambiguity (see `real_field`'s doc
+        // comment) means what's recoverable here is 8.041 - close, not exact.
+        let v = real_field(MOBILIER_ISOLE_OBJ_RECORD).expect("should find a plausible window");
+        assert!((v - 8.042).abs() < 0.01, "expected close to 8.042, got {v}");
     }
 }
