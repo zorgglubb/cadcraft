@@ -140,10 +140,12 @@ fn names_match(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// Whether `s` looks like a real word rather than binary noise that happened to decode to a few
-/// printable characters: only letters, spaces, apostrophes and hyphens, with at least one letter.
+/// Whether `s` looks like a real field value rather than binary noise that happened to decode to
+/// a few printable characters: only letters, digits, spaces, apostrophes and hyphens (a `ClassChar`
+/// field's value can itself be a short code like "T1"), with at least one letter or digit, so
+/// pure punctuation noise (seen in practice: things like `"d@n!"`, `"$p="`) is rejected.
 fn looks_like_a_word(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '\'' || c == '-') && s.chars().any(|c| c.is_ascii_alphabetic())
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '\'' || c == '-') && s.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
 fn raw_bytes(doc: &CadDocument, h: acadrust::Handle) -> Option<&[u8]> {
@@ -290,6 +292,7 @@ mod tests {
     fn looks_like_a_word_rejects_symbol_noise_but_keeps_real_values() {
         assert!(looks_like_a_word("sondage"));
         assert!(looks_like_a_word("tranchee"));
+        assert!(looks_like_a_word("T1"));
         assert!(!looks_like_a_word("d@n!"));
         assert!(!looks_like_a_word("$p="));
         assert!(!looks_like_a_word(""));
