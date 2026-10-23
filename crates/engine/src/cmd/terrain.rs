@@ -5,19 +5,20 @@
 //! and `terrain.dimension_contours` are the exceptions that read the drawing itself: the first
 //! two gather their points for `triangulate`/`contours` from the active space instead of making
 //! the caller assemble `points` by hand, the way a MNT/TIN creation wizard needs to (object
-//! selection by block/layer or a manual pick, altitude filtering); the third reads back the
-//! `Line` entities a prior `terrain.create_contours` (or anything else) left on the chosen
-//! layers and labels them, since nothing here keeps the TIN itself around between calls.
+//! selection by block/layer or a manual pick, altitude filtering); the third reads back whatever
+//! a prior `terrain.create_contours` (or anything else) left on the chosen layers and labels it,
+//! since nothing here keeps the TIN itself around between calls.
 //!
-//! **Scope, stated plainly**: contour segments are extracted per-triangle (`cadcraft_terrain`'s
-//! `contours` function) and only chained into walkable polylines inside
-//! `terrain.dimension_contours` (for placing labels along them) - the drawing itself still gets
-//! one `LINE` per raw segment, not a single smoothed `LWPOLYLINE` per level. Smoothing/fitting is
-//! a later increment.
+//! Contour segments come out of `cadcraft_terrain::contours` per-triangle, and
+//! `terrain.create_contours` chains every level's raw segments into walkable runs
+//! (`chain_segments`) before drawing - each run becomes one `Polyline3d` (a real 3D POLYLINE,
+//! every vertex's own Z the contour's elevation), not a `LINE` per raw segment, so a contour
+//! that's one connected line in the terrain is one drawing object, closed when its segments
+//! happen to form a loop.
 
 use std::collections::HashSet;
 
-use cadcraft_doc::{Common, EntityKind, HAlign, Handle, Line, Text, VAlign};
+use cadcraft_doc::{Common, EntityKind, HAlign, Handle, Line, Polyline3d, Text, VAlign};
 use cadcraft_geom::{Line as GLine, Vec2, Vec3, line_line};
 use cadcraft_terrain::{TerrainError, contours, triangulate};
 use serde_json::{Value, json};
@@ -61,7 +62,9 @@ pub fn specs() -> Vec<CommandSpec> {
              layer before drawing), smooth?: bool (default true: one light corner-cutting pass over \
              each contour once its raw per-triangle segments are chained together), draw?: bool \
              (default true)} → {pointCount, elevationRange, orders: [{step, layer, levelCount, \
-             segmentCount}]}.",
+             polylineCount, vertexCount}]}. Each contour is drawn as one 3D POLYLINE \
+             (`Polyline3d`) per connected run of triangle edges, every vertex's own Z the \
+             contour's elevation - not one LINE per raw segment.",
         ),
         CommandSpec::new("terrain.dimension_contours", "Dimension Contours...", run_dimension_contours)
             .menu(&["Topo 3D", "Dimension Contours..."])
@@ -255,9 +258,13 @@ fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
     let draw = bool_or(p, "draw", true);
     // A light, optional smoothing pass (one iteration of Chaikin corner-cutting) over each
     // contour once its raw per-triangle segments are chained into a walkable polyline - visually
-    // softer without needing a true spline entity, and the drawing still gets one `LINE` per
-    // (now smoothed) sub-segment, so anything reading raw lines back (`terrain.dimension_contours`
-    // included) keeps working unchanged.
+    // softer without needing a true spline entity. Each chained (and now possibly smoothed)
+    // contour becomes a single 3D POLYLINE (`Polyline3d`, every vertex's own Z the contour's
+    // elevation - the same thing AutoCAD's own elevation/Z would show), not one `LINE` per
+    // sub-segment: a contour that's one connected run of triangle edges is one drawing object,
+    // the way a person tracing it by hand would expect, and only breaks into several polylines
+    // where the raw segments genuinely don't connect (an island, a second hilltop at the same
+    // level, …).
     let smooth = bool_or(p, "smooth", true);
 
     let tin = triangulate(&chosen).map_err(|e| terrain_err(CMD, e))?;
@@ -285,24 +292,28 @@ fn run_create_contours(s: &mut Session, p: &Value) -> Result<Value> {
         levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         levels.dedup();
 
-        let mut seg_count = 0usize;
+        let (mut polyline_count, mut vertex_count) = (0usize, 0usize);
         if draw {
             for (elevation, segs) in group_segments_by_level(&segments) {
                 for chain in chain_segments(segs) {
                     let pts = if smooth { smooth_chain(&chain) } else { chain };
-                    for w in pts.windows(2) {
-                        add_on_layer(
-                            s,
-                            layer,
-                            color.unwrap_or(cadcraft_color::Color::ByLayer),
-                            EntityKind::Line(Line { a: w[0].to3(elevation), b: w[1].to3(elevation) }),
-                        )?;
-                        seg_count += 1;
+                    // `chain_segments` can hand back a chain that closes on itself (every raw
+                    // segment matched into a loop, the common case for an interior contour with
+                    // no hull-edge end) - the closing edge is implicit in a closed polyline, so
+                    // the repeated last point that would otherwise duplicate the first is dropped.
+                    let closed = pts.len() > 2 && (pts[0] - pts[pts.len() - 1]).len() < 1e-6;
+                    let points: Vec<Vec3> = pts[..pts.len() - usize::from(closed)].iter().map(|v| v.to3(elevation)).collect();
+                    if points.len() < 2 {
+                        continue;
                     }
+                    vertex_count += points.len();
+                    add_on_layer(s, layer, color.unwrap_or(cadcraft_color::Color::ByLayer), EntityKind::Polyline3d(Polyline3d { points, closed }))?;
+                    polyline_count += 1;
                 }
             }
         }
-        out_orders.push(json!({ "step": step, "layer": layer, "levelCount": levels.len(), "segmentCount": seg_count }));
+        out_orders
+            .push(json!({ "step": step, "layer": layer, "levelCount": levels.len(), "polylineCount": polyline_count, "vertexCount": vertex_count }));
     }
 
     Ok(json!({ "pointCount": tin.points.len(), "elevationRange": tin.elevation_range(), "orders": out_orders }))
@@ -354,21 +365,40 @@ fn smooth_chain(chain: &[Vec2]) -> Vec<Vec2> {
     out
 }
 
-/// Every `LINE` entity on any of `layers` in the active space, as a flat 2D segment plus its
-/// elevation (assumed constant along the segment, true for anything `terrain.create_contours`
-/// drew) - `terrain.dimension_contours`' only way to find contours, since nothing here keeps a
-/// TIN or a contour set around between calls.
+/// Every contour-shaped entity on any of `layers` in the active space, broken back down into
+/// flat 2D segments plus each one's elevation - `terrain.dimension_contours`' only way to find
+/// contours, since nothing here keeps a TIN or a contour set around between calls. Reads both
+/// what `terrain.create_contours` itself draws now (a `Polyline3d` per contour, every vertex's
+/// own Z the elevation - its consecutive vertex pairs, plus the closing edge when `closed`) and
+/// a plain `LINE` with a level Z at both ends (anything else that might have left contours that
+/// way, or an older drawing from before contours became polylines).
 fn contour_lines_on_layers(s: &Session, layers: &[String]) -> Vec<(Vec2, Vec2, f64)> {
     let Ok(st) = s.state() else { return Vec::new() };
     let Some(store) = st.doc.space(&st.space) else { return Vec::new() };
-    store
-        .iter()
-        .filter(|e| layers.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer)))
-        .filter_map(|e| match &e.kind {
-            EntityKind::Line(l) if (l.a.z - l.b.z).abs() < 1e-6 => Some((l.a.xy(), l.b.xy(), l.a.z)),
-            _ => None,
-        })
-        .collect()
+    let mut out = Vec::new();
+    for e in store.iter() {
+        if !layers.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer)) {
+            continue;
+        }
+        match &e.kind {
+            EntityKind::Line(l) if (l.a.z - l.b.z).abs() < 1e-6 => out.push((l.a.xy(), l.b.xy(), l.a.z)),
+            EntityKind::Polyline3d(pl) => {
+                for w in pl.points.windows(2) {
+                    if (w[0].z - w[1].z).abs() < 1e-6 {
+                        out.push((w[0].xy(), w[1].xy(), w[0].z));
+                    }
+                }
+                if pl.closed
+                    && let (Some(first), Some(last)) = (pl.points.first(), pl.points.last())
+                    && (first.z - last.z).abs() < 1e-6
+                {
+                    out.push((last.xy(), first.xy(), last.z));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Chains raw, per-triangle contour segments sharing an elevation into walkable polylines by
@@ -904,11 +934,11 @@ mod tests {
             .expect("should succeed");
         let orders = out["orders"].as_array().expect("orders array");
         assert_eq!(orders.len(), 2);
-        assert!(orders[0]["segmentCount"].as_u64().unwrap_or(0) > 0);
-        assert!(orders[1]["segmentCount"].as_u64().unwrap_or(0) > 0);
+        assert!(orders[0]["polylineCount"].as_u64().unwrap_or(0) > 0);
+        assert!(orders[1]["polylineCount"].as_u64().unwrap_or(0) > 0);
         let d = s.doc().unwrap();
-        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C2")));
-        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C5")));
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C2") && matches!(e.kind, EntityKind::Polyline3d(_))));
+        assert!(d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C5") && matches!(e.kind, EntityKind::Polyline3d(_))));
     }
 
     #[test]
@@ -947,9 +977,9 @@ mod tests {
         tilted_square_points(&mut s);
         let smoothed = s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "SMOOTH" }], "smooth": true })).unwrap();
         let raw = s.execute("terrain.create_contours", &json!({ "orders": [{ "step": 2.0, "layer": "RAW" }], "smooth": false })).unwrap();
-        let smoothed_n = smoothed["orders"][0]["segmentCount"].as_u64().unwrap_or(0);
-        let raw_n = raw["orders"][0]["segmentCount"].as_u64().unwrap_or(0);
-        assert!(smoothed_n > raw_n, "smoothing should subdivide each chained segment into more, shorter ones ({smoothed_n} vs {raw_n})");
+        let smoothed_n = smoothed["orders"][0]["vertexCount"].as_u64().unwrap_or(0);
+        let raw_n = raw["orders"][0]["vertexCount"].as_u64().unwrap_or(0);
+        assert!(smoothed_n > raw_n, "smoothing should subdivide each chained contour into more vertices ({smoothed_n} vs {raw_n})");
     }
 
     #[test]

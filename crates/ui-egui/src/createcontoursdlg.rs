@@ -435,7 +435,7 @@ mod tests {
         open(&mut app);
         let st = State { orders: vec![row("2", "C2")], ..app.create_contours_dlg.clone().unwrap() };
         let out = app.run("terrain.create_contours", params(&st, true)).unwrap();
-        assert!(out["orders"][0]["segmentCount"].as_u64().unwrap_or(0) > 0);
+        assert!(out["orders"][0]["polylineCount"].as_u64().unwrap_or(0) > 0);
         assert!(app.session.doc().unwrap().model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("C2")));
     }
 }
