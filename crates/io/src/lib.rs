@@ -67,6 +67,28 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         let (dxf, notes) = cadcraft_dwg::dwg_to_dxf_noted(bytes, cadcraft_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
         let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
         d.read_notes = notes;
+        // Autodesk Map 3D "Object Data" (#610): not carried by the DXF bridge above (it lives in
+        // custom objects the DXF writer doesn't emit), so it's read separately, straight from the
+        // DWG, and tagged onto the matching entities the same way an imported Shapefile's fields
+        // are. A failed or empty read here never fails opening the file; the attributes just
+        // don't show.
+        if let Ok(attrs) = cadcraft_dwg::dwg_map_attributes(bytes, cadcraft_dwg::Limits::DEFAULT) {
+            // Model space only for now: the sample files this was reverse-engineered from only
+            // ever carried Object Data on model-space entities.
+            for h in d.model.handles() {
+                let Some(e) = d.model.get(h) else { continue };
+                let Some((table, fields)) = attrs.get(&h.0) else { continue };
+                let mut e = (**e).clone();
+                // Prepended, not replaced: the entity's original XDATA (the raw `AcMap_...`
+                // integers this was decoded from) is kept after it, so saving the file back out
+                // doesn't drop it, and `import_attrs::fields` (which only looks at the first
+                // tags) still finds this block.
+                let mut xdata = cadcraft_doc::import_attrs::tag_fields(cadcraft_doc::import_attrs::DWG_MAP_APPID, table, fields);
+                xdata.append(&mut e.common.xdata);
+                e.common.xdata = xdata;
+                d.model.replace(e);
+            }
+        }
         return Ok(d);
     }
     match ext(name).as_str() {

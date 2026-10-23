@@ -18,6 +18,10 @@ pub const SHP_APPID: &str = "CADCRAFT_SHP";
 /// table name + field values, same shape as the Shapefile mechanism above).
 pub const ATTR_TABLE_APPID: &str = "CADCRAFT_ATTRTABLE";
 
+/// XDATA application id for Autodesk Map 3D "Object Data" attributes recovered from a DWG
+/// (`cadcraft_dwg::dwg_map_attributes`), shown as "Attributs" in Properties.
+pub const DWG_MAP_APPID: &str = "CADCRAFT_DWGMAPATTR";
+
 /// Sentinel key the table name rides on, as the first field-shaped `1000` tag after the APPID
 /// marker - chosen unlikely to collide with a real field name, which is why it isn't simply
 /// `"table"`. There is nowhere else to put it: XDATA is a flat list of `(code, value)` pairs, and

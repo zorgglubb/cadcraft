@@ -7,6 +7,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// Autodesk Map 3D "Object Data" (#610: shown as "Attributs" in Properties, instead of raw
+/// XDATA): see `mapdata`'s module doc.
+#[cfg(not(target_arch = "wasm32"))]
+mod mapdata;
+
 /// DWG version codes we can write.
 pub const VERSIONS: &[(&str, &str)] =
     &[("AC1015", "2000"), ("AC1018", "2004"), ("AC1021", "2007"), ("AC1024", "2010"), ("AC1027", "2013"), ("AC1032", "2018")];
@@ -62,6 +67,26 @@ mod native {
     /// runaway conversion stops at the limit instead of filling memory first.
     pub fn dwg_to_dxf_with(bytes: &[u8], limits: Limits) -> Result<Vec<u8>, String> {
         dwg_to_dxf_noted(bytes, limits).map(|(dxf, _)| dxf)
+    }
+
+    /// Reads a DWG's Autodesk Map 3D "Object Data" (named per-entity attribute tables), keyed by
+    /// entity handle (matching the handles CADCraft's own DXF reader assigns from the DXF this
+    /// module writes). Within [`Limits::DEFAULT`]'s DWG size limit; never errors on a file this
+    /// reads fine otherwise - a DWG with no Object Data, or one this can't make sense of, simply
+    /// yields an empty map (see `mapdata`'s module doc).
+    pub fn dwg_map_attributes(bytes: &[u8], limits: Limits) -> Result<super::mapdata::MapAttributes, String> {
+        if bytes.len() > limits.max_dwg_bytes {
+            return Err(format!("DWG: the file is {}, larger than the {} CADCraft opens", mb(bytes.len() as u64), mb(limits.max_dwg_bytes as u64)));
+        }
+        let outcome = std::panic::catch_unwind(|| {
+            acadrust::DwgReader::from_stream_with_options(Cursor::new(bytes), acadrust::DwgReadOptions::failsafe()).read_with_stats()
+        })
+        .map_err(|_| "the DWG reader failed on this file".to_string())?
+        .map_err(|e| format!("DWG: {e}"))?;
+        if !outcome.stats.record_stream_read {
+            return Ok(super::mapdata::MapAttributes::new());
+        }
+        Ok(std::panic::catch_unwind(|| super::mapdata::map_attributes(&outcome.document)).unwrap_or_default())
     }
 
     /// [`dwg_to_dxf_with`], also returning notes on what the read left out. The reader runs in
@@ -407,7 +432,9 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+pub use mapdata::MapAttributes;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::{dwg_map_attributes, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
 
 /// The error for a DWG version CADCraft can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -427,6 +454,12 @@ pub fn dwg_to_dxf_noted(_bytes: &[u8], _limits: Limits) -> Result<(Vec<u8>, Vec<
 #[cfg(target_arch = "wasm32")]
 pub fn dwg_to_dxf_with(_bytes: &[u8], _limits: Limits) -> Result<Vec<u8>, String> {
     Err("DWG files can't be opened in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub type MapAttributes = std::collections::HashMap<u64, (String, Vec<(String, String)>)>;
+#[cfg(target_arch = "wasm32")]
+pub fn dwg_map_attributes(_bytes: &[u8], _limits: Limits) -> Result<MapAttributes, String> {
+    Ok(MapAttributes::new())
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
