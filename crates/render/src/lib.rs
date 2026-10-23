@@ -1190,12 +1190,15 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::Image(i) => {
             // IMAGEFRAME, same semantics as WIPEOUTFRAME above: 0 hides the border and its
             // corner-to-corner diagonals entirely, 1 always draws them, 2 draws on screen but
-            // not when plotting.
-            let frame = match ctx.d.header.i64("IMAGEFRAME", 1) {
-                0 => false,
-                2 => !b.plotting,
-                _ => true,
-            };
+            // not when plotting. An image can also hide its own frame regardless of IMAGEFRAME
+            // (the Properties panel's "Hide frame" - CADCraft's own display bit, see
+            // `IMAGE_FRAME_HIDDEN`).
+            let frame = i.display & cadcraft_doc::IMAGE_FRAME_HIDDEN == 0
+                && match ctx.d.header.i64("IMAGEFRAME", 1) {
+                    0 => false,
+                    2 => !b.plotting,
+                    _ => true,
+                };
             if frame {
                 let o = i.insert.xy();
                 let u = i.u.xy() * i.size.x;

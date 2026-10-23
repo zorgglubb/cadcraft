@@ -136,7 +136,11 @@ mod tests {
         // edge, mirroring the whole image vertically above where it belongs.
         assert_eq!(pl.v, cadcraft_geom::Vec3::new(0.0, -2.0, 0.0));
         let far_corner = pl.insert + pl.u * pl.size.x + pl.v * pl.size.y;
-        assert!(far_corner.y < pl.insert.y, "the image's far corner ({far_corner:?}) must sit below its top edge (insert {:?}), not above it", pl.insert);
+        assert!(
+            far_corner.y < pl.insert.y,
+            "the image's far corner ({far_corner:?}) must sit below its top edge (insert {:?}), not above it",
+            pl.insert
+        );
         assert!((far_corner.y - 161.0).abs() < 1e-9);
     }
 }

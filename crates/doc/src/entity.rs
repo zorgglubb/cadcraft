@@ -862,7 +862,9 @@ pub struct Image {
     #[serde(default)]
     pub clipping: bool,
     /// Display flags: 1 show the image, 2 show it when not aligned with the screen, 4 use the
-    /// clip boundary, 8 transparency on.
+    /// clip boundary, 8 transparency on. 16 (CADCraft extension, not a real DXF/AutoCAD bit:
+    /// ignored by other readers) hides this image's own border and diagonal cross, regardless
+    /// of the drawing's IMAGEFRAME.
     #[serde(default = "image_display")]
     pub display: u16,
     /// Brightness, contrast and fade, 0..=100.
@@ -877,7 +879,14 @@ pub struct Image {
     pub pixel_size: Vec2,
     #[serde(default)]
     pub resolution_units: u8,
+    /// A "nodata" pixel colour (CADCraft extension: not part of the DXF IMAGE entity, so it does
+    /// not round-trip through DXF/DWG) made transparent wherever it occurs in the image, the way
+    /// GIS raster viewers ignore a scanner's black/white collar around an orthophoto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodata: Option<[u8; 3]>,
 }
+/// Display bit: this image's own border + diagonal cross is hidden, regardless of IMAGEFRAME.
+pub const IMAGE_FRAME_HIDDEN: u16 = 16;
 fn image_display() -> u16 {
     7
 }
@@ -904,6 +913,7 @@ impl Default for Image {
             fade: 0,
             pixel_size: image_pixel(),
             resolution_units: 0,
+            nodata: None,
         }
     }
 }

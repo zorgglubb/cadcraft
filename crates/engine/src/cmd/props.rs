@@ -118,6 +118,11 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
                     o.insert("area".into(), json!(pl.area().abs()));
                 }
             }
+            EntityKind::Image(img) => {
+                o.insert("imageShow".into(), json!(img.display & 1 != 0));
+                o.insert("imageFrame".into(), json!(img.display & cadcraft_doc::IMAGE_FRAME_HIDDEN == 0));
+                o.insert("nodata".into(), img.nodata.map_or(Value::Null, |[r, g, b]| json!([r, g, b])));
+            }
             _ => {}
         }
     }
@@ -394,6 +399,31 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     if let Some(x) = num("angle") {
                         h.angle = x.to_radians();
+                    }
+                }
+                EntityKind::Image(img) => {
+                    if let Some(show) = p.get("imageShow").and_then(Value::as_bool) {
+                        if show {
+                            img.display |= 1;
+                        } else {
+                            img.display &= !1;
+                        }
+                    }
+                    if let Some(frame) = p.get("imageFrame").and_then(Value::as_bool) {
+                        if frame {
+                            img.display &= !cadcraft_doc::IMAGE_FRAME_HIDDEN;
+                        } else {
+                            img.display |= cadcraft_doc::IMAGE_FRAME_HIDDEN;
+                        }
+                    }
+                    // `null` clears the nodata colour; an [r, g, b] array (0..=255 each) sets it.
+                    if p.get("nodata").is_some_and(Value::is_null) {
+                        img.nodata = None;
+                    } else if let Some(rgb) = p.get("nodata").and_then(|v| v.as_array()) {
+                        let c: Option<Vec<u8>> = rgb.iter().map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok())).collect();
+                        if let Some([r, g, b]) = c.as_deref() {
+                            img.nodata = Some([*r, *g, *b]);
+                        }
                     }
                 }
                 _ => {}
@@ -1021,7 +1051,7 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::Session;
 
@@ -1039,5 +1069,32 @@ mod tests {
             s.execute("properties.set", &json!({ "handles": [h], "linetype": ok })).unwrap();
             assert_eq!(lt(&s), ok);
         }
+    }
+
+    /// The Properties panel's image-only fields: show/hide, frame on/off and a nodata colour -
+    /// each round-trips through `properties`/`properties.set` and nothing else about the image
+    /// changes along the way.
+    #[test]
+    fn properties_set_toggles_image_show_frame_and_nodata() {
+        let mut s = Session::new();
+        let h = s.add_entity(cadcraft_doc::EntityKind::Image(cadcraft_doc::Image::default())).expect("should insert an image");
+        let get = |s: &mut Session| s.execute("properties", &json!({ "handles": [h.hex()] })).unwrap()["objects"][0].clone();
+
+        let before = get(&mut s);
+        assert_eq!(before["imageShow"], json!(true));
+        assert_eq!(before["imageFrame"], json!(true));
+        assert_eq!(before["nodata"], Value::Null);
+
+        s.execute("properties.set", &json!({ "handles": [h.hex()], "imageShow": false })).unwrap();
+        assert_eq!(get(&mut s)["imageShow"], json!(false));
+        s.execute("properties.set", &json!({ "handles": [h.hex()], "imageShow": true, "imageFrame": false })).unwrap();
+        let g = get(&mut s);
+        assert_eq!(g["imageShow"], json!(true));
+        assert_eq!(g["imageFrame"], json!(false));
+
+        s.execute("properties.set", &json!({ "handles": [h.hex()], "nodata": [255, 0, 128] })).unwrap();
+        assert_eq!(get(&mut s)["nodata"], json!([255, 0, 128]));
+        s.execute("properties.set", &json!({ "handles": [h.hex()], "nodata": null })).unwrap();
+        assert_eq!(get(&mut s)["nodata"], Value::Null);
     }
 }

@@ -127,10 +127,11 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
-    /// Decoded textures for `plan.import_image` entities, by file path - `None` caches a decode
-    /// failure so a bad/missing file is reported once, not reread every frame. See
-    /// [`image_texture`].
-    image_textures: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// Decoded textures for `plan.import_image` entities, by (file path, nodata colour) - `None`
+    /// caches a decode failure so a bad/missing file is reported once, not reread every frame.
+    /// Keyed on the nodata colour too since two IMAGE entities can share a file with different
+    /// "ignore this colour" settings. See [`image_texture`].
+    image_textures: std::collections::HashMap<(String, Option<[u8; 3]>), Option<egui::TextureHandle>>,
 }
 
 impl CanvasState {
@@ -712,17 +713,28 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
 /// Decodes and uploads `path`'s image once, caching the `TextureHandle` (or the decode failure,
 /// as `None`, so a bad file is reported once rather than reread every frame). Mirrors
 /// `image_preview.rs`'s own `load`: full-file read, `image` crate sniffs the format, `to_rgba8`,
-/// `egui::ColorImage`, `ctx.load_texture`.
+/// `egui::ColorImage`, `ctx.load_texture`. `nodata`, when set, zeroes the alpha of every pixel
+/// that matches it (exactly - the usual GIS convention for a collar/no-data colour around a
+/// scanned or stitched orthophoto), cached alongside `path` since two entities can share a file
+/// with a different nodata colour.
 fn image_texture<'a>(
-    cache: &'a mut std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    cache: &'a mut std::collections::HashMap<(String, Option<[u8; 3]>), Option<egui::TextureHandle>>,
     ctx: &egui::Context,
     path: &str,
+    nodata: Option<[u8; 3]>,
 ) -> Option<&'a egui::TextureHandle> {
     cache
-        .entry(path.to_string())
+        .entry((path.to_string(), nodata))
         .or_insert_with(|| {
             let bytes = std::fs::read(path).ok()?;
-            let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+            let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+            if let Some([r, g, b]) = nodata {
+                for px in img.pixels_mut() {
+                    if px.0[0] == r && px.0[1] == g && px.0[2] == b {
+                        px.0[3] = 0;
+                    }
+                }
+            }
             let size = [img.width() as usize, img.height() as usize];
             let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
             Some(ctx.load_texture(format!("cc-image-{path}"), color, egui::TextureOptions::LINEAR))
@@ -746,18 +758,18 @@ fn draw_images(app: &mut CadApp, p: &egui::Painter, xf: &Xf, ctx: &egui::Context
         cadcraft_doc::Transparency::ByLayer => doc.layer(&e.common.layer).map_or(0, |l| l.transparency),
         cadcraft_doc::Transparency::ByBlock => 0,
     };
-    let images: Vec<(Vec2, Vec2, Vec2, String, u8)> = space
+    let images: Vec<(Vec2, Vec2, Vec2, String, u8, Option<[u8; 3]>)> = space
         .iter()
         .filter(|e| e.common.visible && visible_layer(&e.common.layer))
         .filter_map(|e| match &e.kind {
             cadcraft_doc::EntityKind::Image(i) if i.display & 1 != 0 => {
-                Some((i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, i.path.clone(), cadcraft_render::alpha(pct(e))))
+                Some((i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, i.path.clone(), cadcraft_render::alpha(pct(e)), i.nodata))
             }
             _ => None,
         })
         .collect();
-    for (o, u, v, path, alpha) in images {
-        let Some(tex) = image_texture(&mut app.canvas.image_textures, ctx, &path) else { continue };
+    for (o, u, v, path, alpha, nodata) in images {
+        let Some(tex) = image_texture(&mut app.canvas.image_textures, ctx, &path, nodata) else { continue };
         let mut mesh = egui::Mesh::with_texture(tex.id());
         let corners = [o, o + u, o + u + v, o + v];
         let uvs = [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)];
@@ -2498,13 +2510,14 @@ pub(crate) mod tests {
         let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
 
         draw_images(&mut app, &painter, &xf, &ctx);
-        assert!(app.canvas.image_textures.get(&path.to_string_lossy().to_string()).is_some_and(Option::is_some), "the image should have decoded");
+        let key = (path.to_string_lossy().to_string(), None);
+        assert!(app.canvas.image_textures.get(&key).is_some_and(Option::is_some), "the image should have decoded");
 
         // A second frame must reuse the cached texture rather than redecode (the file is removed
         // first, so a redecode would turn the cache entry into a failure).
         let _ = std::fs::remove_file(&path);
         draw_images(&mut app, &painter, &xf, &ctx);
-        assert!(app.canvas.image_textures.get(&path.to_string_lossy().to_string()).is_some_and(Option::is_some), "the cached texture should survive");
+        assert!(app.canvas.image_textures.get(&key).is_some_and(Option::is_some), "the cached texture should survive");
     }
 
     /// A missing or unreadable file is reported once, not reread every frame - the cache keeps
@@ -2527,7 +2540,7 @@ pub(crate) mod tests {
 
         draw_images(&mut app, &painter, &xf, &ctx);
         assert!(
-            matches!(app.canvas.image_textures.get("/nonexistent/path/does-not-exist.png"), Some(None)),
+            matches!(app.canvas.image_textures.get(&("/nonexistent/path/does-not-exist.png".to_string(), None)), Some(None)),
             "a missing file should cache as a failure"
         );
     }

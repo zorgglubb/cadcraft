@@ -893,6 +893,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut attrib_set: Vec<Value> = Vec::new();
     let mut shp_attr_set: Vec<Value> = Vec::new();
     let mut data_attr_set: Vec<Value> = Vec::new();
+    // A command other than `properties.set` (e.g. `draworder.front`/`.back` for the image Draw
+    // Order buttons below), run once at the end alongside the rest.
+    let mut extra: Option<(&'static str, Value)> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1101,6 +1104,46 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 num(ui, "Scale", "scale", real(hh.scale), &mut set, &mut bad, &ids);
                 num(ui, "Angle", "angle", real(hh.angle.to_degrees()), &mut set, &mut bad, &ids);
             }
+            EntityKind::Image(img) => {
+                let shown = img.display & 1 != 0;
+                let framed = img.display & cadcraft_doc::IMAGE_FRAME_HIDDEN == 0;
+                prop_row(ui, "Show image", |ui| {
+                    let mut v = shown;
+                    if ui.checkbox(&mut v, "").changed() {
+                        set = Some(json!({ "handles": ids, "imageShow": v }));
+                    }
+                });
+                prop_row(ui, "Frame", |ui| {
+                    let mut v = framed;
+                    if ui.checkbox(&mut v, "").on_hover_text(crate::tl!("The border and diagonal cross around the image")).changed() {
+                        set = Some(json!({ "handles": ids, "imageFrame": v }));
+                    }
+                });
+                prop_row(ui, "Nodata colour", |ui| {
+                    ui.horizontal(|ui| {
+                        let mut on = img.nodata.is_some();
+                        if ui.checkbox(&mut on, "").on_hover_text(crate::tl!("Treat one pixel colour as transparent")).changed() {
+                            set = Some(json!({ "handles": ids, "nodata": if on { json!([255, 255, 255]) } else { Value::Null } }));
+                        }
+                        if on {
+                            let mut rgb = img.nodata.unwrap_or([255, 255, 255]);
+                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                set = Some(json!({ "handles": ids, "nodata": [rgb[0], rgb[1], rgb[2]] }));
+                            }
+                        }
+                    });
+                });
+                prop_row(ui, "Draw order", |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button(crate::tl!("Bring to Front")).clicked() {
+                            extra = Some(("draworder.front", json!({ "handles": ids })));
+                        }
+                        if ui.button(crate::tl!("Send to Back")).clicked() {
+                            extra = Some(("draworder.back", json!({ "handles": ids })));
+                        }
+                    });
+                });
+            }
             EntityKind::Dimension(dm) => {
                 prop_row(ui, "Text override", |ui| {
                     if let Some(s) = edit_field(ui, ui.id().with(("dimtxt", &ids)), dm.text.clone()) {
@@ -1275,6 +1318,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     for p in data_attr_set {
         let _ = app.run("data.set_attribute", p);
+    }
+    if let Some((c, p)) = extra {
+        let _ = app.run(c, p);
     }
 }
 
