@@ -49,16 +49,22 @@ pub fn parse(text: &str) -> Result<WorldFile, WorldFileError> {
 
 impl WorldFile {
     /// The world-space position and axis vectors for a `width` x `height` pixel image, suitable
-    /// for a CADCraft `IMAGE` entity (`insert`, `u` per-pixel across, `v` per-pixel up). Rotation
-    /// terms are folded into `u`/`v` so a rotated worldfile still places the image correctly.
+    /// for a CADCraft `IMAGE` entity (`insert`, `u` per-pixel across, `v` per-pixel down).
+    /// Rotation terms are folded into `u`/`v` so a rotated worldfile still places the image
+    /// correctly.
     pub fn placement(&self, width_px: u32, height_px: u32) -> ImagePlacement {
         // Worldfile convention: top-left pixel CENTRE is (origin_x, origin_y). The image's
         // top-left CORNER - CADCraft's `insert` point for an IMAGE entity - sits half a pixel
-        // up-and-left of that along the file's own row/column axes.
+        // up-and-left of that along the file's own row/column axes. `v` points the same way
+        // pixel rows increase (down the image, same sign as the worldfile's own pixel_size_y,
+        // conventionally negative) so `insert + u*width + v*height` lands on the image's far
+        // corner BELOW its top edge rather than mirrored above it - `cadcraft-render`'s frame
+        // and the canvas's real-pixel quad both trace `[insert, insert+u, insert+u+v, insert+v]`
+        // and expect `v` to point this way.
         let u = cadcraft_geom::Vec3::new(self.pixel_size_x, self.rotation_x, 0.0);
-        let v = cadcraft_geom::Vec3::new(self.rotation_y, -self.pixel_size_y, 0.0);
-        let corner_x = self.origin_x - 0.5 * u.x - 0.5 * (-v.x);
-        let corner_y = self.origin_y - 0.5 * u.y - 0.5 * (-v.y);
+        let v = cadcraft_geom::Vec3::new(self.rotation_y, self.pixel_size_y, 0.0);
+        let corner_x = self.origin_x - 0.5 * u.x - 0.5 * v.x;
+        let corner_y = self.origin_y - 0.5 * u.y - 0.5 * v.y;
         ImagePlacement {
             insert: cadcraft_geom::Vec3::new(corner_x, corner_y, 0.0),
             u,
@@ -118,5 +124,19 @@ mod tests {
         assert!((pl.insert.x - 99.0).abs() < 1e-9);
         assert!((pl.insert.y - 201.0).abs() < 1e-9);
         assert_eq!(pl.size, cadcraft_geom::Vec2::new(10.0, 20.0));
+    }
+
+    #[test]
+    fn v_points_toward_increasing_rows_so_the_image_is_not_mirrored_above_its_insert() {
+        let wf = parse("2.0\n0\n0\n-2.0\n100.0\n200.0\n").expect("should parse");
+        let pl = wf.placement(10, 20);
+        // `v` must carry the same sign as the worldfile's own pixel_size_y (here -2.0): pointing
+        // down the image, the way rows increase - not negated into an "up" vector. A negated `v`
+        // used to send the far corner (insert + u*width + v*height) ABOVE the image's own top
+        // edge, mirroring the whole image vertically above where it belongs.
+        assert_eq!(pl.v, cadcraft_geom::Vec3::new(0.0, -2.0, 0.0));
+        let far_corner = pl.insert + pl.u * pl.size.x + pl.v * pl.size.y;
+        assert!(far_corner.y < pl.insert.y, "the image's far corner ({far_corner:?}) must sit below its top edge (insert {:?}), not above it", pl.insert);
+        assert!((far_corner.y - 161.0).abs() < 1e-9);
     }
 }

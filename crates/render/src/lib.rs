@@ -1188,12 +1188,22 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Image(i) => {
-            let o = i.insert.xy();
-            let u = i.u.xy() * i.size.x;
-            let v = i.v.xy() * i.size.y;
-            b.polyline(ctx, rgb, lw, &[o, o + u, o + u + v, o + v, o]);
-            b.polyline(ctx, rgb, lw, &[o, o + u + v]);
-            b.polyline(ctx, rgb, lw, &[o + u, o + v]);
+            // IMAGEFRAME, same semantics as WIPEOUTFRAME above: 0 hides the border and its
+            // corner-to-corner diagonals entirely, 1 always draws them, 2 draws on screen but
+            // not when plotting.
+            let frame = match ctx.d.header.i64("IMAGEFRAME", 1) {
+                0 => false,
+                2 => !b.plotting,
+                _ => true,
+            };
+            if frame {
+                let o = i.insert.xy();
+                let u = i.u.xy() * i.size.x;
+                let v = i.v.xy() * i.size.y;
+                b.polyline(ctx, rgb, lw, &[o, o + u, o + u + v, o + v, o]);
+                b.polyline(ctx, rgb, lw, &[o, o + u + v]);
+                b.polyline(ctx, rgb, lw, &[o + u, o + v]);
+            }
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),

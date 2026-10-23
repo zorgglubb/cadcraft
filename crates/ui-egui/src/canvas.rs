@@ -738,22 +738,31 @@ fn draw_images(app: &mut CadApp, p: &egui::Painter, xf: &Xf, ctx: &egui::Context
     let Ok(doc) = app.session.doc() else { return };
     let Some(space) = doc.space(&cadcraft_doc::Space::Model) else { return };
     let visible_layer = |layer: &str| doc.layer(layer).is_none_or(cadcraft_doc::Layer::visible);
-    let images: Vec<(Vec2, Vec2, Vec2, String)> = space
+    // The entity's own Transparency (editable in Properties like any other object's) - ByLayer
+    // falls back to the layer's own percentage, ByBlock is opaque (images aren't nested in
+    // blocks here). `cadcraft_render::alpha` turns the resolved 0..=90 percent into 255..=26.
+    let pct = |e: &cadcraft_doc::Entity| match e.common.transparency {
+        cadcraft_doc::Transparency::Percent(pc) => pc,
+        cadcraft_doc::Transparency::ByLayer => doc.layer(&e.common.layer).map_or(0, |l| l.transparency),
+        cadcraft_doc::Transparency::ByBlock => 0,
+    };
+    let images: Vec<(Vec2, Vec2, Vec2, String, u8)> = space
         .iter()
         .filter(|e| e.common.visible && visible_layer(&e.common.layer))
         .filter_map(|e| match &e.kind {
             cadcraft_doc::EntityKind::Image(i) if i.display & 1 != 0 => {
-                Some((i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, i.path.clone()))
+                Some((i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, i.path.clone(), cadcraft_render::alpha(pct(e))))
             }
             _ => None,
         })
         .collect();
-    for (o, u, v, path) in images {
+    for (o, u, v, path, alpha) in images {
         let Some(tex) = image_texture(&mut app.canvas.image_textures, ctx, &path) else { continue };
         let mut mesh = egui::Mesh::with_texture(tex.id());
         let corners = [o, o + u, o + u + v, o + v];
         let uvs = [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)];
-        mesh.vertices.extend(corners.iter().zip(uvs).map(|(c, uv)| egui::epaint::Vertex { pos: xf.to_screen(*c), uv, color: Color32::WHITE }));
+        let color = Color32::from_white_alpha(alpha);
+        mesh.vertices.extend(corners.iter().zip(uvs).map(|(c, uv)| egui::epaint::Vertex { pos: xf.to_screen(*c), uv, color }));
         mesh.indices.extend([0, 1, 2, 0, 2, 3]);
         p.add(Shape::mesh(mesh));
     }
