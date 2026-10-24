@@ -94,6 +94,26 @@ pub fn specs() -> Vec<CommandSpec> {
         // A script or MCP call still gets the plain data back.
         CommandSpec::new("plan.image_show", "Show Image", run_image_show)
             .params("{handles?: [string] (default: the current selection)} → {images: [{handle, path}]}; errs if none of the targets is an IMAGE"),
+        // PLAN.AUTONUM ("Numérotation auto"): click repeatedly to place a TEXT at each point,
+        // with a label that increments every time. Params are gathered as a short chain of
+        // command-line prompts (start value, increment, prefix, suffix, layer, height, rotation)
+        // before the click loop starts, same as any other AutoCAD-style interactive command -
+        // there is no dialog-with-OK-button plumbing for interactive commands in this engine
+        // (`CommandSpec::interactive`'s factory takes no params), so the UI's Dynamic Input /
+        // command line is how a person answers them, exactly like TEXT's own height/rotation
+        // prompts just above. Leader arrows, MTEXT/block-attribute output, "confirm value before
+        // writing" and "control numbering" (seen on a reference tool's dialog) are not
+        // implemented yet - only plain TEXT output on a chosen layer, which is the tool's core
+        // use.
+        CommandSpec::new("plan.autonum", "Auto numbering", run_autonum)
+            .menu(&["Plan", "Auto numbering"])
+            .interactive(|_| Ok(Box::new(AutoNumM::default())))
+            .params(
+                "No headless form (click-driven only, like TEXT). Interactively: start value, \
+                 increment, prefix, suffix, target layer (blank = current layer), text height and \
+                 rotation, then click repeatedly to place incrementing TEXT entities; Enter or Esc \
+                 ends the command.",
+            ),
         CommandSpec::new("plan.carroyage", "Carroyage", run_carroyage).menu(&["Plan", "Carroyage..."]).params(
             "{window: {min:[x,y], max:[x,y]} (the model-space area to grid), scale: number (the N \
                  in 1:N), paper?: \"A4\"|\"A3\"|\"A2\"|\"A1\"|\"A0\" (default \"A4\"), landscape?: bool \
@@ -854,6 +874,171 @@ impl Interactive for CarroyagePickM {
     }
 }
 
+/// PLAN.AUTONUM's non-interactive form: there is nothing to do headlessly (the points come from
+/// clicks on screen), so a plain JSON call just errs, same as `plan.carroyage_pick`.
+fn run_autonum(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(bad("plan.autonum", "click the points to number on screen (interactive only)"))
+}
+
+/// Parses a start/increment field, keeping the zero-padding width implied by a leading zero
+/// (e.g. "001" numbers as 001, 002, ... up to the field's own width; "1" doesn't pad at all).
+fn parse_padded_int(t: &str) -> Option<(i64, usize)> {
+    let t = t.trim();
+    if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return None;
+    }
+    let n: i64 = t.parse().ok()?;
+    let pad = if t.starts_with('0') && t.len() > 1 { t.len() } else { 0 };
+    Some((n, pad))
+}
+
+/// PLAN.AUTONUM: a short chain of prompts collects the numbering scheme (start value, increment,
+/// prefix, suffix, target layer, text height, rotation), then every subsequent click places one
+/// TEXT entity at that point with the next label in the sequence. Enter/Esc ends the command;
+/// clicking never stops it, matching the reference tool's own "stays active until cancelled"
+/// behaviour.
+#[derive(Default)]
+struct AutoNumM {
+    start: Option<(i64, usize)>,
+    increment: Option<i64>,
+    prefix: Option<String>,
+    suffix: Option<String>,
+    /// `Some(name)` once answered; an empty answer means "use the current layer" and is stored
+    /// as `Some(String::new())` so the prompt chain still advances.
+    layer: Option<String>,
+    height: Option<f64>,
+    rotation: Option<f64>,
+    /// The next value to stamp (starts at `start.0`, moves by `increment` after every placement).
+    next: i64,
+}
+
+impl Interactive for AutoNumM {
+    fn name(&self) -> &'static str {
+        "AUTONUM"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let th = s.doc().map(|d| d.header.f64("TEXTSIZE", 2.5)).unwrap_or(2.5);
+        match (&self.start, &self.increment, &self.prefix, &self.suffix, &self.layer, &self.height, &self.rotation) {
+            (None, ..) => Prompt::new("Starting value", Accept::TEXT).default("1"),
+            (Some(_), None, ..) => Prompt::new("Index increment", Accept::TEXT).default("1"),
+            (Some(_), Some(_), None, ..) => Prompt { raw: true, ..Prompt::new("Prefix string (Enter for none)", Accept::TEXT) },
+            (Some(_), Some(_), Some(_), None, ..) => Prompt { raw: true, ..Prompt::new("Suffix string (Enter for none)", Accept::TEXT) },
+            (Some(_), Some(_), Some(_), Some(_), None, ..) => {
+                Prompt { raw: true, ..Prompt::new("Target layer (Enter for current layer)", Accept::TEXT) }
+            }
+            (Some(_), Some(_), Some(_), Some(_), Some(_), None, _) => Prompt::new("Text height", Accept::POINT_OR_NUMBER).default(format!("{th:.4}")),
+            (Some(_), Some(_), Some(_), Some(_), Some(_), Some(_), None) => Prompt::new("Text rotation", Accept::TEXT).default("0"),
+            _ => Prompt::new("Specify point to number", Accept::POINT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.start.is_none() {
+            let t = match i {
+                Input::Enter => "1".to_string(),
+                Input::Text(t) => t,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            let Some(parsed) = parse_padded_int(&t) else {
+                return Err(bad("plan.autonum", "the starting value must be a whole number"));
+            };
+            self.start = Some(parsed);
+            self.next = parsed.0;
+            return Ok(Step::Continue);
+        }
+        if self.increment.is_none() {
+            let t = match i {
+                Input::Enter => "1".to_string(),
+                Input::Text(t) => t,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            let n: i64 = t.trim().parse().map_err(|_| bad("plan.autonum", "the increment must be a whole number"))?;
+            self.increment = Some(n);
+            return Ok(Step::Continue);
+        }
+        if self.prefix.is_none() {
+            self.prefix = Some(match i {
+                Input::Enter => String::new(),
+                Input::Text(t) => t,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            });
+            return Ok(Step::Continue);
+        }
+        if self.suffix.is_none() {
+            self.suffix = Some(match i {
+                Input::Enter => String::new(),
+                Input::Text(t) => t,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            });
+            return Ok(Step::Continue);
+        }
+        if self.layer.is_none() {
+            self.layer = Some(match i {
+                Input::Enter => String::new(),
+                Input::Text(t) => t,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            });
+            return Ok(Step::Continue);
+        }
+        if self.height.is_none() {
+            let th = s.doc().map(|d| d.header.f64("TEXTSIZE", 2.5)).unwrap_or(2.5);
+            let h = match i {
+                Input::Enter => th,
+                Input::Text(t) => t.trim().parse::<f64>().map_err(|_| bad("plan.autonum", "the text height must be a number"))?,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            if h <= 0.0 {
+                return Err(bad("plan.autonum", "the text height must be positive"));
+            }
+            self.height = Some(h);
+            return Ok(Step::Continue);
+        }
+        if self.rotation.is_none() {
+            let r = match i {
+                Input::Enter => 0.0,
+                Input::Text(t) => s.angle_settings().direction(&t).ok_or_else(|| bad("plan.autonum", "the rotation must be an angle"))?,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.rotation = Some(r);
+            return Ok(Step::Continue);
+        }
+        match i {
+            Input::Point(p) => {
+                let (_, pad) = self.start.unwrap_or((1, 0));
+                let label = format!("{}{:0pad$}{}", self.prefix.as_deref().unwrap_or(""), self.next, self.suffix.as_deref().unwrap_or(""), pad = pad);
+                let layer_name = self.layer.as_deref().unwrap_or("");
+                let prev_layer = if !layer_name.is_empty() {
+                    let d = s.doc_mut()?;
+                    d.ensure_layer(layer_name);
+                    let prev = d.header.str("CLAYER", "0");
+                    d.header.set_str("CLAYER", layer_name);
+                    Some(prev)
+                } else {
+                    None
+                };
+                let h = self.height.unwrap_or(2.5);
+                let r = self.rotation.unwrap_or(0.0);
+                let kind = crate::cmd::draw::make_text(s, p, &label, h, r, (HAlign::Left, VAlign::Baseline));
+                let result = s.add_entity(kind);
+                if let Some(prev) = prev_layer {
+                    s.doc_mut()?.header.set_str("CLAYER", &prev);
+                }
+                result?;
+                self.next = self.next.checked_add(self.increment.unwrap_or(1)).ok_or_else(|| bad("plan.autonum", "numbering overflowed"))?;
+                Ok(Step::Continue)
+            }
+            Input::Enter | Input::Cancel => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1386,5 +1571,40 @@ mod tests {
         s.input(super::Input::Point(cadcraft_geom::Vec2::new(5.0, 6.0))).expect("opposite corner");
         assert!(s.running.is_none(), "should be done");
         assert_eq!(s.carroyage_pick, Some((cadcraft_geom::Vec2::new(1.0, 2.0), cadcraft_geom::Vec2::new(5.0, 6.0))));
+    }
+
+    #[test]
+    fn autonum_places_an_incrementing_text_on_each_click() {
+        use super::Input;
+        let mut s = session_with_doc();
+        assert!(s.execute("plan.autonum", &json!({})).is_err(), "no headless form");
+        s.start("plan.autonum").expect("should start");
+        // start=001 (padded), increment=2, prefix="P", suffix="", layer="4TX" (new), height=3, rotation default.
+        s.input(Input::Text("001".into())).expect("start");
+        s.input(Input::Text("2".into())).expect("increment");
+        s.input(Input::Text("P".into())).expect("prefix");
+        s.input(Input::Enter).expect("suffix (default)");
+        s.input(Input::Text("4TX".into())).expect("layer");
+        s.input(Input::Text("3".into())).expect("height");
+        s.input(Input::Enter).expect("rotation (default)");
+
+        s.input(Input::Point(cadcraft_geom::Vec2::new(0.0, 0.0))).expect("click 1");
+        s.input(Input::Point(cadcraft_geom::Vec2::new(10.0, 0.0))).expect("click 2");
+        s.input(Input::Point(cadcraft_geom::Vec2::new(20.0, 0.0))).expect("click 3");
+        s.input(Input::Enter).expect("end");
+        assert!(s.running.is_none(), "should be done after Enter");
+
+        let d = s.doc().expect("doc");
+        assert!(d.layer("4TX").is_some(), "the named layer should have been created");
+        let mut labels: Vec<String> = Vec::new();
+        for e in d.space(&Space::Model).expect("model space").iter() {
+            if let EntityKind::Text(t) = &e.kind {
+                labels.push(t.value.clone());
+                assert_eq!(e.common.layer, "4TX");
+                assert_eq!(t.height, 3.0);
+            }
+        }
+        labels.sort();
+        assert_eq!(labels, vec!["P001".to_string(), "P003".to_string(), "P005".to_string()]);
     }
 }
