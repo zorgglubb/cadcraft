@@ -42,28 +42,95 @@ const MIN_RUN_LEN: usize = 3;
 /// (data-derived) size of the scan for a hostile/damaged file.
 const MAX_SCAN_BYTES: usize = 1 << 16;
 
+/// How many consecutive undecodable bytes a run tolerates before ending for good (see below).
+const MAX_GAP: usize = 1;
+
 /// Decodes `data[start..]` at a fixed `stride` (1 or 2 bytes per character), starting the first
 /// character at `start`, for as long as each byte decodes to a printable ASCII character: a byte
 /// `b` decodes to character `b / 2` when `b` is even and `b / 2` falls in `0x20..0x7f`
 /// (reverse-engineered from sample files; see the module doc).
+///
+/// This encoding has no representation at all for a non-ASCII (e.g. accented Latin-1) character:
+/// doubling its code point either doesn't fit the `0x20..0x7f` window or isn't even, so the byte
+/// for that one character fails the check above while every ASCII byte around it keeps passing.
+/// Without this special case, that single bad byte used to end the run there (e.g. "tranchée"
+/// stopping after "tranch"), handing the rest of the word to a *different*, unrelated run that
+/// happens to start past it - which could then look longer/better-placed to `text_runs`'s
+/// dedup and get reported standalone (e.g. a stray "ie" from further on), silently welding onto
+/// what looks like one word ("tranchie") even though the two runs share no real relationship.
+/// Instead, up to [`MAX_GAP`] consecutive bad bytes are tolerated *mid-run* (never at the very
+/// start - a run has to begin with a real decoded character, or every starting offset in the
+/// scan would spawn a spurious placeholder-prefixed run that out-sorts and shadows the real,
+/// later run it was supposed to merely extend): each is emitted as a placeholder `?` (there's no
+/// way to recover what the real character was - see the module doc) and scanning continues, only
+/// ending the run for good once a real gap is found. A gap only bridges when every byte in it is
+/// odd - a byte that can never decode at any value (see `decode_byte_at`), standing in for a
+/// character (such as an accented letter) this encoding has no slot for at all. An even byte
+/// that's merely out of the printable range (e.g. 0x00) is a value the encoding is able to
+/// represent and chose not to - most likely a genuine structural separator between fields, not a
+/// missing letter - so that still ends the run normally. This never changes the decoding of a
+/// byte that already passes the check, so plain ASCII text decodes exactly as before.
 fn run_at(data: &[u8], start: usize, stride: usize) -> String {
     let mut out = String::new();
     let mut i = start;
-    while let Some(&b) = data.get(i) {
-        if b % 2 != 0 {
-            break;
+    while i < data.len() {
+        match decode_byte_at(data, i) {
+            Some(c) => {
+                out.push(c as char);
+                i = i.saturating_add(stride);
+            }
+            None => {
+                if out.is_empty() {
+                    // Never bridge at the very start of a run - see the doc comment above.
+                    break;
+                }
+                // Peek past up to MAX_GAP consecutive odd bytes: only commit to the
+                // placeholder(s) if a real character resumes right after, so a run that's
+                // genuinely just ending here (the common case - most bytes past a real run are
+                // unrelated binary noise) isn't padded with bogus trailing '?'s.
+                let mut gap = 0usize;
+                let mut j = i;
+                let mut bridged = false;
+                while gap < MAX_GAP {
+                    match data.get(j) {
+                        Some(&b) if b % 2 != 0 => {}
+                        _ => break,
+                    }
+                    j = j.saturating_add(stride);
+                    gap += 1;
+                    if decode_byte_at(data, j).is_some() {
+                        bridged = true;
+                        break;
+                    }
+                }
+                if bridged {
+                    for _ in 0..gap {
+                        out.push('?');
+                    }
+                    i = j;
+                } else {
+                    break;
+                }
+            }
         }
-        let c = b / 2;
-        if !(0x20..0x7f).contains(&c) {
-            break;
-        }
-        out.push(c as char);
-        i = i.saturating_add(stride);
         if out.len() >= MAX_SCAN_BYTES {
             break;
         }
     }
     out
+}
+
+/// A single byte's decoded character, when it's a valid one (see [`run_at`]'s doc comment).
+fn decode_byte_at(data: &[u8], i: usize) -> Option<u8> {
+    let &b = data.get(i)?;
+    if b % 2 != 0 {
+        return None;
+    }
+    let c = b / 2;
+    if !(0x20..0x7f).contains(&c) {
+        return None;
+    }
+    Some(c)
 }
 
 /// Every maximal text run in `data` of at least [`MIN_RUN_LEN`] characters, trying a 1-byte and
@@ -367,6 +434,43 @@ mod tests {
         data.extend("oka".bytes().map(|b| b * 2));
         data.extend([7, 9, 11]);
         assert!(text_runs(&data).contains(&"oka".to_string()));
+    }
+
+    #[test]
+    fn run_at_bridges_a_single_undecodable_byte_with_a_placeholder() {
+        // "tranch" + one byte that can never decode (odd, so it fails the `b % 2 == 0` check -
+        // standing in for the real accented byte this encoding has no slot for) + "e".
+        let mut data: Vec<u8> = "tranch".bytes().map(|b| b * 2).collect();
+        data.push(199); // odd: undecodable at any stride.
+        data.push(b'e' * 2);
+        assert_eq!(run_at(&data, 0, 1), "tranch?e");
+    }
+
+    #[test]
+    fn run_at_does_not_pad_a_run_that_genuinely_ends() {
+        // "oka" followed by two bad bytes in a row (one more than MAX_GAP tolerates), then
+        // nothing decodable - the run must end at "oka", not grow spurious trailing '?'s.
+        let mut data: Vec<u8> = "oka".bytes().map(|b| b * 2).collect();
+        data.extend([199, 201, 255, 255]);
+        assert_eq!(run_at(&data, 0, 1), "oka");
+    }
+
+    #[test]
+    fn text_runs_keeps_an_accented_word_whole_instead_of_a_shorter_unrelated_overlap() {
+        // Regression for "tranchée" decoding as "tranchie": a real accented byte used to break
+        // the run after "tranch", leaving a later, unrelated run (here a standalone "ie" a few
+        // bytes further on) to be reported on its own and look, out of context, like it finished
+        // the word. With the gap bridged, "tranch?e" is reported as one run and nothing merges
+        // the two into "tranchie" - `text_runs` only ever reports what [`run_at`] itself produced.
+        let mut data: Vec<u8> = "tranch".bytes().map(|b| b * 2).collect();
+        data.push(199); // the undecodable byte standing in for 'é'.
+        data.push(b'e' * 2);
+        data.push(0); // a gap of real binary noise between the word and the decoy.
+        data.extend("ie".bytes().map(|b| b * 2)); // too short to be kept (< MIN_RUN_LEN) anyway.
+        let runs = text_runs(&data);
+        assert!(runs.contains(&"tranch?e".to_string()));
+        assert!(!runs.contains(&"tranchie".to_string()));
+        assert!(!runs.iter().any(|r| r == "ie"));
     }
 
     #[test]
