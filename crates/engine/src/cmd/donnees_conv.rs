@@ -1,26 +1,36 @@
 //! Two "Données" (Data) menu conversion commands ported from a user's personal AutoLISP
 //! toolbox: `data.altitude_to_poly` (TCALT.lsp) and `data.axe_to_ellipse` (AXE2ELLIPSE.lsp).
 //! Both read/write the same Object Data mechanism as `data.rs`/`plan.rs`'s `set_shp_attribute`.
+//! Menu/toolbar invocation gathers their (all-optional, defaulted) parameters through a short
+//! chain of command-line prompts rather than an egui dialog - see `data_convert.rs`'s module doc
+//! for why.
 
 use cadcraft_doc::{AttributeField, AttributeFieldKind, AttributeTableDef, Entity, EntityKind, Handle};
 use cadcraft_geom::{PolyVertex, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::data::ATTR_TABLE_APPID;
+use super::machines::{SelOutcome, SelectPhase};
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("data.altitude_to_poly", "Altitude->poly", run_altitude_to_poly).menu(&["Data", "Altitude->poly"]).params(
-            "{handles?: [string] (default: current selection; LINE/LWPOLYLINE only), \
+        CommandSpec::new("data.altitude_to_poly", "Altitude->poly", run_altitude_to_poly)
+            .menu(&["Data", "Altitude->poly"])
+            .interactive(|_| Ok(Box::new(AltitudeToPolyM::default())))
+            .params(
+                "{handles?: [string] (default: current selection; LINE/LWPOLYLINE only), \
                  blockName?: string (default \"TCPOINT\"), altAttr?: string (default \"ALT\")} → \
                  {changed}. For each targeted LINE/LWPOLYLINE, finds the single closest `blockName` \
                  block insert (anywhere in the drawing) carrying a numeric `altAttr` attribute, and \
                  sets the entity's elevation (LWPOLYLINE) or both endpoints' Z (LINE) to that value.",
-        ),
-        CommandSpec::new("data.axe_to_ellipse", "Axe->Ellipse", run_axe_to_ellipse).menu(&["Data", "Axe->Ellipse"]).params(
-            "{handles?: [string] (default: current selection; LINE/LWPOLYLINE only), \
+            ),
+        CommandSpec::new("data.axe_to_ellipse", "Axe->Ellipse", run_axe_to_ellipse)
+            .menu(&["Data", "Axe->Ellipse"])
+            .interactive(|_| Ok(Box::new(AxeToEllipseM::default())))
+            .params(
+                "{handles?: [string] (default: current selection; LINE/LWPOLYLINE only), \
                  sourceTable?: string (default \"Axe\"), fieldNature?: string (default \"Nature\"), \
                  destTable?: string (default \"Structure\"), threshold?: number (default 0.08), \
                  sizeThreshold?: number (default 0.30), deleteTrigger?: string (default \"PLAN\"), \
@@ -30,8 +40,9 @@ pub fn specs() -> Vec<CommandSpec> {
                  list, copies its Object Data (remapped if `remap` matches the Nature value) into \
                  `destTable` (auto-created with the source's field types plus a blank \"Datation\" \
                  text field, if missing), then deletes the source (if its Nature value matches \
-                 `deleteTrigger`) or simplifies it to just its first two construction points.",
-        ),
+                 `deleteTrigger`) or simplifies it to just its first two construction points. \
+                 `remap` is JSON-only (not exposed in the interactive prompt chain).",
+            ),
     ]
 }
 
@@ -346,6 +357,221 @@ fn run_axe_to_ellipse(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "created": created, "deleted": deleted, "simplified": simplified }))
 }
 
+/// "Select objects", "Block name" (default TCPOINT), "Altitude attribute" (default ALT), then
+/// runs DATA.ALTITUDE_TO_POLY.
+#[derive(Default)]
+struct AltitudeToPolyM {
+    sel: SelectPhase,
+    picked: Option<Vec<Handle>>,
+    block_name: Option<String>,
+}
+
+impl Interactive for AltitudeToPolyM {
+    fn name(&self) -> &'static str {
+        "ALTITUDE_TO_POLY"
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.sel = SelectPhase::begin(s);
+        if self.sel.done {
+            self.picked = Some(self.sel.picked.clone());
+        }
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.picked.is_none() {
+            return self.sel.prompt();
+        }
+        if self.block_name.is_none() {
+            return Prompt::new("Block to read the altitude from (Enter for TCPOINT)", Accept::TEXT).default("TCPOINT");
+        }
+        Prompt::new("Attribute holding the altitude (Enter for ALT)", Accept::TEXT).default("ALT")
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.picked.is_none() {
+            return match self.sel.feed(s, &i)? {
+                SelOutcome::More => Ok(Step::Continue),
+                SelOutcome::Empty => Ok(Step::Done),
+                SelOutcome::Done(hs) => {
+                    self.picked = Some(hs);
+                    Ok(Step::Continue)
+                }
+            };
+        }
+        if self.block_name.is_none() {
+            let b = match i {
+                Input::Enter => "TCPOINT".to_string(),
+                Input::Text(t) => {
+                    let t = t.trim().to_string();
+                    if t.is_empty() { "TCPOINT".to_string() } else { t }
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.block_name = Some(b);
+            return Ok(Step::Continue);
+        }
+        let attr = match i {
+            Input::Enter => "ALT".to_string(),
+            Input::Text(t) => {
+                let t = t.trim().to_string();
+                if t.is_empty() { "ALT".to_string() } else { t }
+            }
+            Input::Cancel => return Ok(Step::Cancel),
+            _ => return Ok(Step::Continue),
+        };
+        let hs = self.picked.clone().unwrap_or_default();
+        let spec = super::find_command("data.altitude_to_poly").ok_or_else(|| EngineError::UnknownCommand("data.altitude_to_poly".into()))?;
+        let r = (spec.run)(
+            s,
+            &json!({
+                "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(),
+                "blockName": self.block_name.clone().unwrap_or_else(|| "TCPOINT".to_string()),
+                "altAttr": attr,
+            }),
+        )?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        s.set_selection(Vec::new());
+        Ok(Step::Done)
+    }
+}
+
+/// "Select objects", then the source/destination table names, Nature field name, delete
+/// trigger, and the two distance thresholds (each with the JSON default, Enter accepts it), then
+/// runs DATA.AXE_TO_ELLIPSE. `remap` stays JSON-only - not worth a text-list prompt here.
+#[derive(Default)]
+struct AxeToEllipseM {
+    sel: SelectPhase,
+    picked: Option<Vec<Handle>>,
+    source_table: Option<String>,
+    field_nature: Option<String>,
+    dest_table: Option<String>,
+    delete_trigger: Option<String>,
+}
+
+impl Interactive for AxeToEllipseM {
+    fn name(&self) -> &'static str {
+        "AXE_TO_ELLIPSE"
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.sel = SelectPhase::begin(s);
+        if self.sel.done {
+            self.picked = Some(self.sel.picked.clone());
+        }
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.picked.is_none() {
+            return self.sel.prompt();
+        }
+        if self.source_table.is_none() {
+            return Prompt::new("Source attribute table (Enter for Axe)", Accept::TEXT).default("Axe");
+        }
+        if self.field_nature.is_none() {
+            return Prompt::new("Field giving the Nature value (Enter for Nature)", Accept::TEXT).default("Nature");
+        }
+        if self.dest_table.is_none() {
+            return Prompt::new("Destination attribute table (Enter for Structure)", Accept::TEXT).default("Structure");
+        }
+        if self.delete_trigger.is_none() {
+            return Prompt::new("Nature value that deletes the source (Enter for PLAN)", Accept::TEXT).default("PLAN");
+        }
+        Prompt::new("Minimum distance between construction points", Accept::TEXT).default("0.08")
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.picked.is_none() {
+            return match self.sel.feed(s, &i)? {
+                SelOutcome::More => Ok(Step::Continue),
+                SelOutcome::Empty => Ok(Step::Done),
+                SelOutcome::Done(hs) => {
+                    self.picked = Some(hs);
+                    Ok(Step::Continue)
+                }
+            };
+        }
+        if self.source_table.is_none() {
+            let t = match i {
+                Input::Enter => "Axe".to_string(),
+                Input::Text(t) => {
+                    let t = t.trim().to_string();
+                    if t.is_empty() { "Axe".to_string() } else { t }
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.source_table = Some(t);
+            return Ok(Step::Continue);
+        }
+        if self.field_nature.is_none() {
+            let f = match i {
+                Input::Enter => "Nature".to_string(),
+                Input::Text(t) => {
+                    let t = t.trim().to_string();
+                    if t.is_empty() { "Nature".to_string() } else { t }
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.field_nature = Some(f);
+            return Ok(Step::Continue);
+        }
+        if self.dest_table.is_none() {
+            let d = match i {
+                Input::Enter => "Structure".to_string(),
+                Input::Text(t) => {
+                    let t = t.trim().to_string();
+                    if t.is_empty() { "Structure".to_string() } else { t }
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.dest_table = Some(d);
+            return Ok(Step::Continue);
+        }
+        if self.delete_trigger.is_none() {
+            let d = match i {
+                Input::Enter => "PLAN".to_string(),
+                Input::Text(t) => {
+                    let t = t.trim().to_string();
+                    if t.is_empty() { "PLAN".to_string() } else { t }
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            self.delete_trigger = Some(d);
+            return Ok(Step::Continue);
+        }
+        let threshold = match i {
+            Input::Enter => 0.08,
+            Input::Text(t) => t.trim().parse::<f64>().map_err(|_| bad("data.axe_to_ellipse", "the threshold must be a number"))?,
+            Input::Cancel => return Ok(Step::Cancel),
+            _ => return Ok(Step::Continue),
+        };
+        if threshold < 0.0 {
+            return Err(bad("data.axe_to_ellipse", "the threshold must not be negative"));
+        }
+        let hs = self.picked.clone().unwrap_or_default();
+        let spec = super::find_command("data.axe_to_ellipse").ok_or_else(|| EngineError::UnknownCommand("data.axe_to_ellipse".into()))?;
+        let r = (spec.run)(
+            s,
+            &json!({
+                "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(),
+                "sourceTable": self.source_table.clone().unwrap_or_else(|| "Axe".to_string()),
+                "fieldNature": self.field_nature.clone().unwrap_or_else(|| "Nature".to_string()),
+                "destTable": self.dest_table.clone().unwrap_or_else(|| "Structure".to_string()),
+                "deleteTrigger": self.delete_trigger.clone().unwrap_or_else(|| "PLAN".to_string()),
+                "threshold": threshold,
+            }),
+        )?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        s.set_selection(Vec::new());
+        Ok(Step::Done)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +639,26 @@ mod tests {
         let l = Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(1.0, 0.0, 0.0) };
         let h = s.add_entity(EntityKind::Line(l)).unwrap();
         assert!(s.execute("data.altitude_to_poly", &json!({ "handles": [h.hex()] })).is_err());
+    }
+
+    #[test]
+    fn altitude_to_poly_interactive_picks_prompts_then_defaults() {
+        use crate::Input;
+        let mut s = Session::new();
+        s.add_entity(EntityKind::Insert(tcpoint(0.0, 0.0, "42.0"))).unwrap();
+        let pl = LwPolyline { vertices: vec![pv(0.0, 0.0), pv(5.0, 0.0)], closed: false, const_width: 0.0, elevation: 0.0, plinegen: false };
+        let h = s.add_entity(EntityKind::LwPolyline(pl)).unwrap();
+        s.start("data.altitude_to_poly").unwrap();
+        assert!(s.prompt_text().contains("Select"), "{}", s.prompt_text());
+        s.input(Input::Pick(vec![h])).unwrap();
+        s.input(Input::Enter).unwrap(); // Enter
+        assert!(s.prompt_text().contains("Block"), "{}", s.prompt_text());
+        s.input(Input::Enter).unwrap(); // default TCPOINT
+        assert!(s.prompt_text().contains("Attribute"), "{}", s.prompt_text());
+        s.input(Input::Enter).unwrap(); // default ALT
+        assert!(s.running.is_none(), "should finish");
+        let EntityKind::LwPolyline(pl) = &s.doc().unwrap().entity(h).unwrap().kind else { panic!() };
+        assert!((pl.elevation - 42.0).abs() < 1e-9);
     }
 
     #[test]

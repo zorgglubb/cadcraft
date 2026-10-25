@@ -8,21 +8,96 @@
 //! Arcs (bulges) on either polyline aren't supported: this tool compares and stitches straight
 //! edges only, so a polyline with any nonzero bulge is rejected up front with a clear message.
 
-use cadcraft_doc::{EntityKind, LwPolyline};
+use cadcraft_doc::{EntityKind, Handle, LwPolyline};
 use cadcraft_geom::{Vec2, polygon_union};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{EngineError, Result, Session};
+use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("plan.merge_polygons", "Fusionner 2 polygones", run_merge_polygons).menu(&["Plan", "Fusionner 2 polygones"]).params(
-        "{handles: [hex, hex]} (exactly 2 closed, straight-edged LWPOLYLINEs; default: the current \
+    vec![
+        CommandSpec::new("plan.merge_polygons", "Fusionner 2 polygones", run_merge_polygons)
+            .menu(&["Plan", "Fusionner 2 polygones"])
+            .interactive(|_| Ok(Box::new(MergePolygonsM::default())))
+            .params(
+                "{handles: [hex, hex]} (exactly 2 closed, straight-edged LWPOLYLINEs; default: the current \
                  selection) → {handle}. Merges the two into one polyline carrying the FIRST one's layer, \
                  color and attribute table; both originals are deleted. Only succeeds when the two polygons \
                  touch or overlap into a single simple closed boundary - errs for disjoint polygons, for a \
                  union that would leave a hole, or for a polyline with any bulge (arc) segment.",
-    )]
+            ),
+    ]
+}
+
+/// Picks exactly 2 entities (in order - the first one's layer/color/attribute table survive the
+/// merge), then runs PLAN.MERGE_POLYGONS. A failed merge (e.g. disjoint polygons) clears the
+/// picks and starts the pick-2 prompt over, rather than ending the command, so the user can just
+/// try different objects.
+#[derive(Default)]
+struct MergePolygonsM {
+    picked: Vec<Handle>,
+}
+
+impl MergePolygonsM {
+    fn run(&mut self, s: &mut Session) -> Result<Step> {
+        let spec = super::find_command("plan.merge_polygons").ok_or_else(|| EngineError::UnknownCommand("plan.merge_polygons".into()))?;
+        let hs: Vec<String> = self.picked.iter().map(|h| h.hex()).collect();
+        let r = (spec.run)(s, &json!({ "handles": hs }));
+        s.set_selection(Vec::new());
+        match r {
+            Ok(v) => {
+                if let Some(m) = v.get("message").and_then(Value::as_str) {
+                    s.echo(m.to_string());
+                }
+                Ok(Step::Done)
+            }
+            Err(e) => {
+                s.echo(format!("{e} Pick the first polygon again."));
+                self.picked.clear();
+                Ok(Step::Continue)
+            }
+        }
+    }
+}
+
+impl Interactive for MergePolygonsM {
+    fn name(&self) -> &'static str {
+        "FUSIONPOLY"
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        let pre = s.selection();
+        if pre.len() == 2 {
+            self.picked = pre;
+            return self.run(s);
+        }
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        let msg = if self.picked.is_empty() { "Select the first closed polygon" } else { "Select the second closed polygon" };
+        Prompt::new(msg, Accept::SELECT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match i {
+            Input::Pick(hs) => {
+                for h in hs {
+                    if self.picked.len() >= 2 {
+                        break;
+                    }
+                    if !self.picked.contains(&h) {
+                        self.picked.push(h);
+                    }
+                }
+                s.echo(format!("{} of 2 polygons selected", self.picked.len()));
+                if self.picked.len() == 2 {
+                    return self.run(s);
+                }
+                Ok(Step::Continue)
+            }
+            Input::Cancel => Ok(Step::Cancel),
+            _ => Ok(Step::Continue),
+        }
+    }
 }
 
 fn straight_polygon(d: &cadcraft_doc::Drawing, h: Handle) -> Result<Vec<Vec2>> {
@@ -136,5 +211,37 @@ mod tests {
         let h1 = s.add_entity(EntityKind::LwPolyline(square(0.0, 0.0, 1.0))).expect("add h1");
         let err = s.execute("plan.merge_polygons", &json!({ "handles": [h1.hex()] })).unwrap_err();
         assert!(err.to_string().contains("exactly 2"), "{err}");
+    }
+
+    #[test]
+    fn interactive_pick_two_then_merges() {
+        use crate::Input;
+        let mut s = session_with_doc();
+        let h1 = s.add_entity(EntityKind::LwPolyline(square(0.0, 0.0, 2.0))).expect("add h1");
+        let h2 = s.add_entity(EntityKind::LwPolyline(square(1.0, 1.0, 2.0))).expect("add h2");
+        s.start("plan.merge_polygons").expect("should start");
+        assert!(s.prompt_text().contains("first"), "{}", s.prompt_text());
+        s.input(Input::Pick(vec![h1])).expect("pick first");
+        assert!(s.prompt_text().contains("second"), "{}", s.prompt_text());
+        s.input(Input::Pick(vec![h2])).expect("pick second");
+        assert!(s.running.is_none(), "command should finish after 2 picks");
+        assert!(s.doc().expect("doc").entity(h1).is_none(), "h1 should be deleted");
+        assert!(s.doc().expect("doc").entity(h2).is_none(), "h2 should be deleted");
+    }
+
+    #[test]
+    fn interactive_recovers_after_a_failed_merge() {
+        use crate::Input;
+        let mut s = session_with_doc();
+        let h1 = s.add_entity(EntityKind::LwPolyline(square(0.0, 0.0, 1.0))).expect("add h1");
+        let h2 = s.add_entity(EntityKind::LwPolyline(square(100.0, 100.0, 1.0))).expect("add h2 (disjoint)");
+        s.start("plan.merge_polygons").expect("should start");
+        s.input(Input::Pick(vec![h1])).expect("pick first");
+        s.input(Input::Pick(vec![h2])).expect("pick second (fails to merge)");
+        // The command stays running, back at "pick the first polygon" instead of ending in error.
+        assert!(s.running.is_some(), "should still be running after a failed merge");
+        assert!(s.prompt_text().contains("first"), "{}", s.prompt_text());
+        assert!(s.doc().expect("doc").entity(h1).is_some(), "h1 should be untouched");
+        assert!(s.doc().expect("doc").entity(h2).is_some(), "h2 should be untouched");
     }
 }

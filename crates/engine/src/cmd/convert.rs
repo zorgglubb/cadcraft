@@ -2,32 +2,109 @@
 //! colour, and flattening ELLIPSE/SPLINE entities down to a plain `LwPolyline` (useful before
 //! handing a drawing to a workflow that only understands polylines).
 
-use cadcraft_doc::{EntityKind, LwPolyline};
+use cadcraft_doc::{EntityKind, Handle, LwPolyline};
 use cadcraft_geom::{Ellipse as GEllipse, PolyVertex, Vec2, ccw_sweep};
 use serde_json::{Value, json};
 
+use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("convert.fixcolors", "Fix Layer Colors", run_fixcolors).menu(&["Plan", "Fix Layer Colors"]).params(
-            "{handles?: [string] (default: current selection)} → {changed: number}. For each selected \
+        CommandSpec::new("convert.fixcolors", "Fix Layer Colors", run_fixcolors)
+            .menu(&["Plan", "Fix Layer Colors"])
+            .interactive(|_| Ok(Box::new(SelectRun::new("convert.fixcolors", "FIXCOLORS"))))
+            .params(
+                "{handles?: [string] (default: current selection)} → {changed: number}. For each selected \
                  object currently ByLayer, resolves its layer's actual colour and sets that object's own \
                  colour to the resolved value - it no longer follows the layer afterwards.",
-        ),
-        CommandSpec::new("convert.ellipse2pl", "Ellipse to Polyline", run_ellipse2pl).menu(&["Plan", "Ellipse to Polyline"]).params(
-            "{handles?: [string] (default: current selection), segments?: number (default 36, for a \
+            ),
+        CommandSpec::new("convert.ellipse2pl", "Ellipse to Polyline", run_ellipse2pl)
+            .menu(&["Plan", "Ellipse to Polyline"])
+            .interactive(|_| Ok(Box::new(SegmentsThenSelect::new("convert.ellipse2pl", "ELLIPSE2PL", "Segment count (full ellipse)", 36))))
+            .params(
+                "{handles?: [string] (default: current selection), segments?: number (default 36, for a \
                  full ellipse; a partial arc uses proportionally fewer)} → {handles: [string]} (the new \
                  polylines). Each selected ELLIPSE is replaced by a tessellated LWPOLYLINE on the same \
                  layer/colour/linetype; a full ellipse becomes a closed polyline, a partial one stays open.",
-        ),
-        CommandSpec::new("convert.spline2pl", "Spline to Polyline", run_spline2pl).menu(&["Plan", "Spline to Polyline"]).params(
-            "{handles?: [string] (default: current selection), segments?: number (default 50)} → \
+            ),
+        CommandSpec::new("convert.spline2pl", "Spline to Polyline", run_spline2pl)
+            .menu(&["Plan", "Spline to Polyline"])
+            .interactive(|_| Ok(Box::new(SegmentsThenSelect::new("convert.spline2pl", "SPLINE2PL", "Segment count", 50))))
+            .params(
+                "{handles?: [string] (default: current selection), segments?: number (default 50)} → \
                  {handles: [string]} (the new polylines). Each selected SPLINE is replaced by evenly \
                  (by parameter) sampled points joined as an LWPOLYLINE, on the same layer/colour.",
-        ),
+            ),
     ]
+}
+
+/// "Select objects", then "Segment count <default>", then runs `cmd` as `{handles, segments}`.
+/// Shared by ELLIPSE2PL and SPLINE2PL - their only difference is the command id, default count
+/// and prompt wording.
+struct SegmentsThenSelect {
+    cmd: &'static str,
+    name: &'static str,
+    label: &'static str,
+    default: u32,
+    sel: SelectPhase,
+    picked: Option<Vec<Handle>>,
+}
+
+impl SegmentsThenSelect {
+    fn new(cmd: &'static str, name: &'static str, label: &'static str, default: u32) -> Self {
+        SegmentsThenSelect { cmd, name, label, default, sel: SelectPhase::default(), picked: None }
+    }
+    fn run(&self, s: &mut Session, hs: &[Handle], segments: u32) -> Result<Step> {
+        let spec = super::find_command(self.cmd).ok_or_else(|| EngineError::UnknownCommand(self.cmd.into()))?;
+        let r = (spec.run)(s, &json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "segments": segments }))?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        Ok(Step::Done)
+    }
+}
+
+impl Interactive for SegmentsThenSelect {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.sel = SelectPhase::begin(s);
+        if self.sel.done {
+            self.picked = Some(self.sel.picked.clone());
+        }
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.picked.is_none() { self.sel.prompt() } else { Prompt::new(self.label, Accept::TEXT).default(self.default.to_string()) }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.picked.is_none() {
+            return match self.sel.feed(s, &i)? {
+                SelOutcome::More => Ok(Step::Continue),
+                SelOutcome::Empty => Ok(Step::Done),
+                SelOutcome::Done(hs) => {
+                    self.picked = Some(hs);
+                    Ok(Step::Continue)
+                }
+            };
+        }
+        let n = match i {
+            Input::Enter => self.default,
+            Input::Text(t) => t.trim().parse::<u32>().map_err(|_| bad(self.cmd, "the segment count must be a whole number"))?,
+            Input::Cancel => return Ok(Step::Cancel),
+            _ => return Ok(Step::Continue),
+        };
+        if n < 2 {
+            return Err(bad(self.cmd, "the segment count must be at least 2"));
+        }
+        let hs = self.picked.clone().unwrap_or_default();
+        let step = self.run(s, &hs, n)?;
+        s.set_selection(Vec::new());
+        Ok(step)
+    }
 }
 
 fn run_fixcolors(s: &mut Session, p: &Value) -> Result<Value> {
