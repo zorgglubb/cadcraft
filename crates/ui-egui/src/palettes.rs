@@ -896,6 +896,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     // A command other than `properties.set` (e.g. `draworder.front`/`.back` for the image Draw
     // Order buttons below), run once at the end alongside the rest.
     let mut extra: Option<(&'static str, Value)> = None;
+    // The image "Nodata colour" eyedropper arms `app.canvas.nodata_pick`, but `app` is borrowed
+    // (via `d`) for the whole match below, so the click only takes effect once that borrow ends.
+    let mut arm_nodata_pick: Option<cadcraft_doc::Handle> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1131,6 +1134,11 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                                 set = Some(json!({ "handles": ids, "nodata": [rgb[0], rgb[1], rgb[2]] }));
                             }
                         }
+                        if sel.len() == 1
+                            && ui.button(crate::tl!("Pick…")).on_hover_text(crate::tl!("Click a pixel on the image to use its colour")).clicked()
+                        {
+                            arm_nodata_pick = sel.first().copied();
+                        }
                     });
                 });
                 prop_row(ui, "Draw order", |ui| {
@@ -1321,6 +1329,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     if let Some((c, p)) = extra {
         let _ = app.run(c, p);
+    }
+    if let Some(h) = arm_nodata_pick {
+        app.canvas.nodata_pick = Some(h);
     }
 }
 

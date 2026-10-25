@@ -132,6 +132,11 @@ pub struct CanvasState {
     /// Keyed on the nodata colour too since two IMAGE entities can share a file with different
     /// "ignore this colour" settings. See [`image_texture`].
     image_textures: std::collections::HashMap<(String, Option<[u8; 3]>), Option<egui::TextureHandle>>,
+    /// Armed by the Properties palette's eyedropper button next to "Nodata colour": the next
+    /// primary click samples that IMAGE entity's pixel under the cursor into its `nodata` field;
+    /// Escape or a right-click cancels without changing anything. See [`show`]'s interception
+    /// near the top (before any normal canvas click handling) and [`sample_nodata_color`].
+    pub nodata_pick: Option<Handle>,
 }
 
 impl CanvasState {
@@ -742,6 +747,39 @@ fn image_texture<'a>(
         .as_ref()
 }
 
+/// Converts a world point into pixel coordinates within an image entity's extent, given its
+/// `insert` (top-left corner) and full-extent `u`/`v` vectors (already scaled by `size`, exactly
+/// as `draw_images` and `worldfile.rs` use them). `None` when the extent is degenerate or the
+/// point falls outside the image (so a click that misses the image is a no-op, not a guess).
+fn image_pixel_at(insert: Vec2, u: Vec2, v: Vec2, width: u32, height: u32, world_pt: Vec2) -> Option<(u32, u32)> {
+    let det = u.x * v.y - u.y * v.x;
+    if width == 0 || height == 0 || !det.is_finite() || det.abs() < 1e-15 {
+        return None;
+    }
+    let dx = world_pt.x - insert.x;
+    let dy = world_pt.y - insert.y;
+    let s = (dx * v.y - dy * v.x) / det;
+    let t = (u.x * dy - u.y * dx) / det;
+    if !(0.0..1.0).contains(&s) || !(0.0..1.0).contains(&t) {
+        return None;
+    }
+    let px = (s * f64::from(width)) as u32;
+    let py = (t * f64::from(height)) as u32;
+    Some((px.min(width.saturating_sub(1)), py.min(height.saturating_sub(1))))
+}
+
+/// The eyedropper's one-shot sample: decodes `path` fresh (the cached texture lives on the GPU
+/// and can't be read back) and reads the one pixel the world point lands on. Only called once per
+/// click, never per frame, so re-decoding here (rather than reusing `image_texture`'s cache) is
+/// cheap enough and keeps this independent of whatever `nodata` colour is already set.
+fn sample_nodata_color(path: &str, insert: Vec2, u: Vec2, v: Vec2, world_pt: Vec2) -> Option<[u8; 3]> {
+    let bytes = std::fs::read(path).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (px, py) = image_pixel_at(insert, u, v, img.width(), img.height(), world_pt)?;
+    let p = img.get_pixel_checked(px, py)?;
+    Some([p.0[0], p.0[1], p.0[2]])
+}
+
 /// Model-space `plan.import_image` entities, drawn with their real pixels (not just the frame
 /// `cadcraft-render`'s vector tessellation already drew for them) - `cadcraft-render` stays free
 /// of egui/wgpu per the project's layering rule, so this reads the drawing directly instead of
@@ -1333,6 +1371,34 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         )
     });
     let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    // The Properties palette's nodata eyedropper is armed: this frame's click (or Escape /
+    // right-click to cancel) is entirely this tool's, so no normal canvas interaction happens.
+    if let Some(img_handle) = app.canvas.nodata_pick {
+        let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape)) || pressed_secondary;
+        if cancel {
+            app.canvas.nodata_pick = None;
+        } else if pressed_primary && inside {
+            if let Some(hp) = hover_pos {
+                let sampled = app.session.doc().ok().and_then(|doc| {
+                    let e = doc.entity(img_handle)?;
+                    let cadcraft_doc::EntityKind::Image(i) = &e.kind else { return None };
+                    let world_pt = xf.to_world(hp);
+                    sample_nodata_color(&i.path, i.insert.xy(), i.u.xy() * i.size.x, i.v.xy() * i.size.y, world_pt)
+                });
+                if let Some([r, g, b]) = sampled {
+                    let _ = app.run("properties.set", serde_json::json!({ "handles": [img_handle.hex()], "nodata": [r, g, b] }));
+                } else {
+                    app.session.echo(crate::i18n::t("Click inside the image to pick its colour.").to_string());
+                }
+            }
+            app.canvas.nodata_pick = None;
+        }
+        if app.canvas.nodata_pick.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        ui.ctx().request_repaint();
+        return;
+    }
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -2485,6 +2551,27 @@ pub(crate) mod tests {
         assert_eq!(alpha(true), 128);
         assert_eq!(alpha(false), 255);
         assert_eq!(alpha(true), 128);
+    }
+
+    /// The eyedropper's world→pixel math: a point inside the extent lands on the right pixel
+    /// (top-left of the image is pixel (0,0), bottom-right is the last row/column), and a point
+    /// outside the extent (even just past an edge) is rejected rather than clamped.
+    #[test]
+    fn image_pixel_at_maps_world_points_to_pixel_coordinates() {
+        let insert = Vec2::new(10.0, 20.0);
+        // 100 world units wide, 50 tall; v points down (negative y), as `draw_images` uses it.
+        let u = Vec2::new(100.0, 0.0);
+        let v = Vec2::new(0.0, -50.0);
+        let (w, h) = (200, 100);
+        // Top-left corner (the insert point itself) is pixel (0, 0).
+        assert_eq!(image_pixel_at(insert, u, v, w, h, insert), Some((0, 0)));
+        // Center of the extent lands mid-image.
+        assert_eq!(image_pixel_at(insert, u, v, w, h, Vec2::new(60.0, -5.0)), Some((100, 50)));
+        // Just outside the right/bottom edge is rejected, not clamped.
+        assert_eq!(image_pixel_at(insert, u, v, w, h, Vec2::new(111.0, 20.0)), None);
+        assert_eq!(image_pixel_at(insert, u, v, w, h, Vec2::new(10.0, -31.0)), None);
+        // A degenerate (zero-area) extent never panics or divides by zero silently wrong.
+        assert_eq!(image_pixel_at(insert, Vec2::ZERO, Vec2::ZERO, w, h, insert), None);
     }
 
     /// An `EntityKind::Image` from `plan.import_image` draws its real decoded pixels, not just
