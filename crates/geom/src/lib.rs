@@ -13,6 +13,7 @@ mod fillet;
 mod intersect;
 mod mat;
 mod nurbs;
+pub mod polygon_union;
 pub mod region;
 mod spline;
 mod spline_fit;

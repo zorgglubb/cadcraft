@@ -1043,6 +1043,8 @@ impl Interactive for AutoNumM {
 mod tests {
     use serde_json::json;
 
+    use cadcraft_doc::{EntityKind, Space};
+
     use super::{CRS_EPSG_VAR, CRS_NAME_VAR};
     use crate::Session;
 

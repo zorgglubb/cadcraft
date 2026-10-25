@@ -8,8 +8,10 @@ mod audit;
 pub(crate) mod blocks;
 pub mod clipboard;
 pub mod constraints;
+mod convert;
 mod data;
 mod data_convert;
+mod donnees_conv;
 mod draw;
 mod draw2;
 mod draworder;
@@ -17,6 +19,7 @@ mod edit;
 mod exchange;
 pub mod file;
 mod foncier;
+mod fusionpoly;
 mod gripcmds;
 mod griphot;
 pub(crate) mod groups;
@@ -213,8 +216,10 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(table::specs());
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
+        v.extend(convert::specs());
         v.extend(data::specs());
         v.extend(data_convert::specs());
+        v.extend(donnees_conv::specs());
         v.extend(lisp::specs());
         v.extend(topo::specs());
         v.extend(topo_points::specs());
@@ -226,6 +231,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo_split::specs());
         v.extend(terrain::specs());
         v.extend(plan::specs());
+        v.extend(fusionpoly::specs());
         v
     })
 }
