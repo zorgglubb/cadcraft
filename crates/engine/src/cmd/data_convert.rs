@@ -46,9 +46,7 @@ fn attribute_table_appid() -> &'static str {
 fn entity_polyline(e: &cadcraft_doc::Entity) -> Option<Polyline> {
     match &e.kind {
         EntityKind::LwPolyline(pl) => Some(Polyline { vertices: pl.vertices.clone(), closed: pl.closed }),
-        EntityKind::Polyline3d(pl) => {
-            Some(Polyline::from_points(&pl.points.iter().map(|p| Vec2::new(p.x, p.y)).collect::<Vec<_>>(), pl.closed))
-        }
+        EntityKind::Polyline3d(pl) => Some(Polyline::from_points(&pl.points.iter().map(|p| Vec2::new(p.x, p.y)).collect::<Vec<_>>(), pl.closed)),
         _ => None,
     }
 }
@@ -116,10 +114,9 @@ fn run_cod_to_num(s: &mut Session, p: &Value) -> Result<Value> {
     for (h, value) in updates {
         let d = s.doc()?;
         let e = d.entity(h).ok_or_else(|| bad(CMD, "no such entity"))?;
-        let (cur_table, mut fields) =
-            cadcraft_doc::import_attrs::fields(e, attribute_table_appid()).filter(|(t, _)| t == &table).unwrap_or_else(|| {
-                (table.clone(), def.fields.iter().map(|f| (f.name.clone(), String::new())).collect())
-            });
+        let (cur_table, mut fields) = cadcraft_doc::import_attrs::fields(e, attribute_table_appid())
+            .filter(|(t, _)| t == &table)
+            .unwrap_or_else(|| (table.clone(), def.fields.iter().map(|f| (f.name.clone(), String::new())).collect()));
         match fields.iter_mut().find(|(k, _)| *k == field) {
             Some((_, v)) => *v = value,
             None => fields.push((field.clone(), value)),
