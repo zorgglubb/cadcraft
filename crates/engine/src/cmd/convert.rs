@@ -17,13 +17,13 @@ pub fn specs() -> Vec<CommandSpec> {
                  colour to the resolved value - it no longer follows the layer afterwards.",
         ),
         CommandSpec::new("convert.ellipse2pl", "Ellipse to Polyline", run_ellipse2pl).menu(&["Plan", "Ellipse to Polyline"]).params(
-            "{handles?: [string] (default: current selection), segments?: number (default 72, for a \
+            "{handles?: [string] (default: current selection), segments?: number (default 36, for a \
                  full ellipse; a partial arc uses proportionally fewer)} → {handles: [string]} (the new \
                  polylines). Each selected ELLIPSE is replaced by a tessellated LWPOLYLINE on the same \
                  layer/colour/linetype; a full ellipse becomes a closed polyline, a partial one stays open.",
         ),
         CommandSpec::new("convert.spline2pl", "Spline to Polyline", run_spline2pl).menu(&["Plan", "Spline to Polyline"]).params(
-            "{handles?: [string] (default: current selection), segments?: number (default 100)} → \
+            "{handles?: [string] (default: current selection), segments?: number (default 50)} → \
                  {handles: [string]} (the new polylines). Each selected SPLINE is replaced by evenly \
                  (by parameter) sampled points joined as an LWPOLYLINE, on the same layer/colour.",
         ),
@@ -63,7 +63,7 @@ fn tessellate_ellipse(e: &GEllipse, n: usize) -> Vec<Vec2> {
 
 fn run_ellipse2pl(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let base_segments = p.get("segments").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(72).clamp(3, 10_000);
+    let base_segments = p.get("segments").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(36).clamp(3, 10_000);
     let space = s.space();
     let mut out = Vec::new();
     for h in hs {
@@ -88,7 +88,7 @@ fn run_ellipse2pl(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_spline2pl(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let n = p.get("segments").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(100).clamp(2, 100_000);
+    let n = p.get("segments").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(50).clamp(2, 100_000);
     let space = s.space();
     let mut out = Vec::new();
     for h in hs {
