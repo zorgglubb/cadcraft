@@ -117,6 +117,7 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
                 if p.closed {
                     o.insert("area".into(), json!(pl.area().abs()));
                 }
+                o.insert("elevation".into(), json!(p.elevation));
             }
             EntityKind::Image(img) => {
                 o.insert("imageShow".into(), json!(img.display & 1 != 0));
@@ -330,6 +331,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     if let Some(c) = p.get("closed").and_then(Value::as_bool) {
                         pl.closed = c;
+                    }
+                    if let Some(x) = num("elevation") {
+                        pl.elevation = x;
                     }
                 }
                 EntityKind::Insert(i) => {

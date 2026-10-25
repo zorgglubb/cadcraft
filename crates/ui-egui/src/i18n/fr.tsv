@@ -1332,3 +1332,27 @@
 	{n} polyline(s) updated	{n} polyligne(s) mise(s) à jour
 	{n} spline(s) converted	{n} spline(s) convertie(s)
 	{n} text(s) created	{n} texte(s) créé(s)
+# Numbering/data-conversion dialogs follow-up (#points_to_tcpoint).
+	Starting value	Valeur de départ
+	Index increment	Incrément d'index
+	Prefix string	Préfixe
+	Suffix string	Suffixe
+	Target layer (blank = current)	Calque cible (vide = courant)
+	Text height (blank = drawing default)	Hauteur de texte (vide = celle du dessin)
+	Text rotation	Rotation du texte
+	The starting value, increment and height must be numbers.	La valeur de départ, l'incrément et la hauteur doivent être des nombres.
+	After Start, click repeatedly on the drawing to place the numbering; press Enter or Escape to stop.	Après "Début", cliquez sur le dessin pour placer la numérotation ; Entrée ou Échap pour arrêter.
+	(existing)	(existante)
+	No attribute tables found yet - add fields to a table, a shapefile import or a DWG Map first.	Aucune table de données pour l'instant - ajoutez des champs à une table, un import shapefile ou une DWG Map.
+	No polyline/polygon selected yet.	Aucune polyligne/polygone sélectionné.
+	Select at least one polyline/polygon, and fill the block name and attribute.	Sélectionnez au moins une polyligne/polygone, et remplissez le nom du bloc et l'attribut.
+	"{t}" doesn't exist yet - it will be created.	« {t} » n'existe pas encore - elle sera créée.
+	Point->TCPOINT	Point->TCPOINT
+	No point selected yet.	Aucun point sélectionné.
+	COD field	Champ COD
+	ALT field	Champ ALT
+	MAT field	Champ MAT
+	(fields)	(champs)
+	Select at least one point, and fill the block name.	Sélectionnez au moins un point, et remplissez le nom du bloc.
+	Each selected point keeps its own attribute-table data; a point with no attribute table is skipped.	Chaque point sélectionné garde ses propres données de table ; un point sans table est ignoré.
+	{created} TCPOINT(s) created, {skipped} skipped	{created} TCPOINT créé(s), {skipped} ignoré(s)

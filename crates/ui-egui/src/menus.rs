@@ -406,6 +406,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::dataconvdlg::open_axe_to_ellipse(app);
             Ok(Value::Null)
         }
+        // Typed, menu or toolbar (no parameters): opens a popup window to collect the seven
+        // numbering settings, then starts PLAN.AUTONUM's own prompt chain pre-filled from them.
+        "plan.autonum" if params.is_null() && app.session.state().is_ok() => {
+            crate::numberingdlg::open(app);
+            Ok(Value::Null)
+        }
+        "data.points_to_tcpoint" if params.is_null() && app.session.state().is_ok() => {
+            crate::pointstotcpointdlg::open(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r

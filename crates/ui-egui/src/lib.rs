@@ -35,6 +35,8 @@ pub mod hatchdlg;
 pub mod importgsidlg;
 pub mod importpointsdlg;
 mod mtext_editor;
+pub mod numberingdlg;
+pub mod pointstotcpointdlg;
 pub mod renumberpointsdlg;
 pub mod searchpointsdlg;
 pub mod spacemouse;
@@ -333,6 +335,10 @@ pub struct CadApp {
     pub altitude_to_poly_dlg: Option<dataconvdlg::AltitudeToPolyState>,
     /// The Axe->Ellipse dialog while open ([`dataconvdlg`]).
     pub axe_to_ellipse_dlg: Option<dataconvdlg::AxeToEllipseState>,
+    /// The Numérotation auto dialog while open ([`numberingdlg`]).
+    pub autonum_dlg: Option<numberingdlg::State>,
+    /// The Point->TCPOINT dialog while open ([`pointstotcpointdlg`]).
+    pub points_to_tcpoint_dlg: Option<pointstotcpointdlg::State>,
 }
 
 impl CadApp {
@@ -393,6 +399,8 @@ impl CadApp {
             extract_to_text_dlg: None,
             altitude_to_poly_dlg: None,
             axe_to_ellipse_dlg: None,
+            autonum_dlg: None,
+            points_to_tcpoint_dlg: None,
         }
     }
 
@@ -687,6 +695,8 @@ impl CadApp {
         carroyagedlg::resume(self);
         tabledlg::resume_assign(self);
         tabledlg::resume_remove(self);
+        dataconvdlg::resume_altitude_to_poly(self);
+        pointstotcpointdlg::resume(self);
         editaltitudesdlg::resume(self);
         createmntdlg::resume(self);
         createcontoursdlg::resume(self);

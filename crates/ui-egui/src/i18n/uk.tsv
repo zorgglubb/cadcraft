@@ -1656,3 +1656,28 @@
 	{n} polyline(s) updated	{n} полілінію(ій) оновлено
 	{n} spline(s) converted	{n} сплайн(ів) перетворено
 	{n} text(s) created	{n} текст(ів) створено
+# Numbering/data-conversion dialogs follow-up (#points_to_tcpoint).
+	Numérotation auto	Автонумерація
+	Starting value	Початкове значення
+	Index increment	Крок індексу
+	Prefix string	Префікс
+	Suffix string	Суфікс
+	Target layer (blank = current)	Цільовий шар (порожньо = поточний)
+	Text height (blank = drawing default)	Висота тексту (порожньо = за замовчуванням)
+	Text rotation	Поворот тексту
+	The starting value, increment and height must be numbers.	Початкове значення, крок і висота мають бути числами.
+	After Start, click repeatedly on the drawing to place the numbering; press Enter or Escape to stop.	Після "Початок" клацайте по кресленню, щоб розмістити нумерацію; Enter або Escape - зупинка.
+	(existing)	(існуюча)
+	No attribute tables found yet - add fields to a table, a shapefile import or a DWG Map first.	Таблиць атрибутів ще немає - спочатку додайте поля до таблиці, імпорту shapefile або DWG Map.
+	No polyline/polygon selected yet.	Полілінію/полігон ще не вибрано.
+	Select at least one polyline/polygon, and fill the block name and attribute.	Виберіть хоча б одну полілінію/полігон і заповніть назву блока й атрибут.
+	"{t}" doesn't exist yet - it will be created.	"{t}" ще не існує - буде створено.
+	Point->TCPOINT	Точка->TCPOINT
+	No point selected yet.	Точку ще не вибрано.
+	COD field	Поле COD
+	ALT field	Поле ALT
+	MAT field	Поле MAT
+	(fields)	(поля)
+	Select at least one point, and fill the block name.	Виберіть хоча б одну точку і заповніть назву блока.
+	Each selected point keeps its own attribute-table data; a point with no attribute table is skipped.	Кожна вибрана точка зберігає власні дані таблиці атрибутів; точка без таблиці атрибутів пропускається.
+	{created} TCPOINT(s) created, {skipped} skipped	Створено TCPOINT: {created}, пропущено: {skipped}

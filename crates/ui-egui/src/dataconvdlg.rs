@@ -13,8 +13,8 @@ use crate::CadApp;
 
 /// `(table name, field names)` for every attribute table DATA.LIST_TABLES currently knows about,
 /// read straight from the engine so a dropdown never drifts from what the drawing actually has.
-fn tables(app: &mut CadApp) -> Vec<(String, Vec<String>)> {
-    app.run("data.list_tables", json!({}))
+pub(crate) fn tables(app: &mut CadApp) -> Vec<(String, Vec<String>)> {
+    app.run("data.list_tables", json!({ "includeShp": true }))
         .ok()
         .and_then(|v| v.get("tables").and_then(Value::as_array).cloned())
         .unwrap_or_default()
@@ -28,27 +28,46 @@ fn tables(app: &mut CadApp) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-fn table_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, tables: &[(String, Vec<String>)], selected: &mut String) {
-    egui::ComboBox::from_id_salt(id).selected_text(if selected.is_empty() { crate::tl!("(choose)").to_string() } else { selected.clone() }).show_ui(
-        ui,
-        |ui| {
-            for (name, _) in tables {
-                ui.selectable_value(selected, name.clone(), name);
+/// A table-name field that can also be typed free-hand (for a table that doesn't exist yet): a
+/// text box plus a dropdown button of the existing names, so the user isn't stuck picking from a
+/// list that might be empty. The dropdown's own closed-button label always shows something
+/// (never a blank button), even with no tables to offer yet.
+fn editable_table_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, tables: &[(String, Vec<String>)], selected: &mut String) {
+    ui.horizontal(|ui| {
+        ui.text_edit_singleline(selected);
+        egui::ComboBox::from_id_salt(id).selected_text(crate::tl!("(existing)")).show_ui(ui, |ui| {
+            if tables.is_empty() {
+                ui.label(crate::tl!("No attribute table yet."));
             }
-        },
-    );
+            for (name, _) in tables {
+                if ui.selectable_label(selected.as_str() == name.as_str(), name).clicked() {
+                    *selected = name.clone();
+                }
+            }
+        });
+    });
 }
 
 fn field_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, tables: &[(String, Vec<String>)], table: &str, selected: &mut String) {
-    let fields: &[String] = tables.iter().find(|(n, _)| n == table).map_or(&[], |(_, f)| f.as_slice());
-    egui::ComboBox::from_id_salt(id).selected_text(if selected.is_empty() { crate::tl!("(choose)").to_string() } else { selected.clone() }).show_ui(
-        ui,
-        |ui| {
-            for f in fields {
-                ui.selectable_value(selected, f.clone(), f);
-            }
-        },
-    );
+    let known = tables.iter().find(|(n, _)| n == table);
+    match known {
+        // An existing table: field names are fixed, so a strict choice keeps the written value
+        // valid.
+        Some((_, fields)) => {
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(if selected.is_empty() { crate::tl!("(choose)").to_string() } else { selected.clone() })
+                .show_ui(ui, |ui| {
+                    for f in fields {
+                        ui.selectable_value(selected, f.clone(), f);
+                    }
+                });
+        }
+        // A table name that doesn't exist yet (about to be created): there's nothing to choose
+        // from, so let the user type the new field's name instead of showing a dead-end dropdown.
+        None => {
+            ui.text_edit_singleline(selected);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -61,11 +80,12 @@ pub struct CodToNumState {
     field: String,
     attr: String,
     tolerance_text: String,
+    last_result: Option<Result<String, String>>,
 }
 
 impl Default for CodToNumState {
     fn default() -> Self {
-        CodToNumState { table: String::new(), field: String::new(), attr: "COD".into(), tolerance_text: "1e-6".into() }
+        CodToNumState { table: String::new(), field: String::new(), attr: "COD".into(), tolerance_text: "1e-6".into(), last_result: None }
     }
 }
 
@@ -85,7 +105,7 @@ pub fn cod_to_num_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
     egui::Window::new(crate::tl!("Point cod->num")).open(open).resizable(true).collapsible(false).default_size(vec2(340.0, 220.0)).show(ctx, |ui| {
         egui::Grid::new("cc_codtonum_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(crate::tl!("Table"));
-            table_combo(ui, "cc_codtonum_table", &tables, &mut st.table);
+            editable_table_combo(ui, "cc_codtonum_table", &tables, &mut st.table);
             ui.end_row();
 
             ui.label(crate::tl!("Field"));
@@ -100,13 +120,27 @@ pub fn cod_to_num_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
             ui.text_edit_singleline(&mut st.tolerance_text);
             ui.end_row();
         });
-        if tables.is_empty() {
-            ui.colored_label(ui.visuals().error_fg_color, crate::tl!("No attribute table yet - create one first (Data > Attribute Table...)."));
-        } else if st.tolerance_text.trim().parse::<f64>().is_err() {
+        if !st.table.is_empty() && !tables.iter().any(|(n, _)| n == &st.table) {
+            ui.colored_label(ui.visuals().warn_fg_color, crate::tf!("\"{t}\" doesn't exist yet - it will be created.", t = st.table.clone()));
+        }
+        if st.tolerance_text.trim().parse::<f64>().is_err() {
             ui.colored_label(ui.visuals().error_fg_color, crate::tl!("Tolerance must be a number."));
         }
+        if let Some(res) = &st.last_result {
+            match res {
+                Ok(msg) => {
+                    ui.colored_label(egui::Color32::from_rgb(0x2e, 0xa0, 0x4c), msg);
+                }
+                Err(msg) => {
+                    ui.colored_label(ui.visuals().error_fg_color, msg);
+                }
+            }
+        }
         ui.separator();
-        let ready = !st.table.is_empty() && !st.field.is_empty() && !st.attr.trim().is_empty() && st.tolerance_text.trim().parse::<f64>().is_ok();
+        let ready = !st.table.trim().is_empty()
+            && !st.field.trim().is_empty()
+            && !st.attr.trim().is_empty()
+            && st.tolerance_text.trim().parse::<f64>().is_ok();
         ui.horizontal(|ui| {
             run = ui.add_enabled(ready, egui::Button::new(crate::tl!("Run"))).clicked();
             close = ui.button(crate::tl!("Close")).clicked();
@@ -118,14 +152,18 @@ pub fn cod_to_num_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
 
     if run {
         let tol: f64 = st.tolerance_text.trim().parse().unwrap_or(1e-6);
-        let r = app.run("data.cod_to_num", json!({ "table": st.table, "field": st.field, "attr": st.attr.trim(), "tolerance": tol }));
+        let r = app.run(
+            "data.cod_to_num",
+            json!({ "table": st.table.trim(), "field": st.field.trim(), "attr": st.attr.trim(), "tolerance": tol, "createIfMissing": true }),
+        );
+        st.last_result = Some(match &r {
+            Ok(v) => Ok(crate::tf!("{n} polyline(s) updated", n = v.get("updated").and_then(Value::as_u64).unwrap_or(0))),
+            Err(e) => Err(e.clone()),
+        });
         app.session.echo(match &r {
-            Ok(v) => crate::tf!("{n} polyline(s) updated", n = v.get("updated").and_then(Value::as_u64).unwrap_or(0)),
+            Ok(_) => st.last_result.clone().and_then(Result::ok).unwrap_or_default(),
             Err(e) => e.clone(),
         });
-        if r.is_ok() {
-            *open = false;
-        }
     }
     if *open {
         app.cod_to_num_dlg = Some(st);
@@ -147,6 +185,7 @@ pub struct ExtractToTextState {
     height_text: String,
     dx_text: String,
     dy_text: String,
+    last_result: Option<Result<String, String>>,
 }
 
 impl Default for ExtractToTextState {
@@ -158,6 +197,7 @@ impl Default for ExtractToTextState {
             height_text: "2.5".into(),
             dx_text: "0".into(),
             dy_text: "0".into(),
+            last_result: None,
         }
     }
 }
@@ -193,7 +233,7 @@ pub fn extract_to_text_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut 
             egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
                 for (i, (table, field)) in st.fields.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        table_combo(ui, ("cc_extract_table", i), &tables_list, table);
+                        editable_table_combo(ui, ("cc_extract_table", i), &tables_list, table);
                         field_combo(ui, ("cc_extract_field", i), &tables_list, table, field);
                         if ui.button("✕").clicked() {
                             remove = Some(i);
@@ -229,6 +269,21 @@ pub fn extract_to_text_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut 
             if !extract_ready(&st) {
                 ui.colored_label(ui.visuals().error_fg_color, crate::tl!("Add at least one table/field, a layer, and valid numbers."));
             }
+            if tables_list.is_empty() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    crate::tl!("No attribute tables found yet - add fields to a table, a shapefile import or a DWG Map first."),
+                );
+            }
+            match &st.last_result {
+                Some(Ok(msg)) => {
+                    ui.colored_label(egui::Color32::from_rgb(0x2e, 0xa0, 0x4c), msg.clone());
+                }
+                Some(Err(msg)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, msg.clone());
+                }
+                None => {}
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 run = ui.add_enabled(extract_ready(&st), egui::Button::new(crate::tl!("Run"))).clicked();
@@ -254,13 +309,15 @@ pub fn extract_to_text_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut 
             "dy": st.dy_text.trim().parse::<f64>().unwrap_or(0.0),
         });
         let r = app.run("data.extract_to_text", params);
-        app.session.echo(match &r {
-            Ok(v) => crate::tf!("{n} text(s) created", n = v.get("created").and_then(Value::as_u64).unwrap_or(0)),
-            Err(e) => e.clone(),
+        st.last_result = Some(match &r {
+            Ok(v) => Ok(crate::tf!("{n} text(s) created", n = v.get("created").and_then(Value::as_u64).unwrap_or(0))),
+            Err(e) => Err(e.clone()),
         });
-        if r.is_ok() {
-            *open = false;
-        }
+        app.session.echo(match &st.last_result {
+            Some(Ok(msg)) => msg.clone(),
+            Some(Err(msg)) => msg.clone(),
+            None => String::new(),
+        });
     }
     if *open {
         app.extract_to_text_dlg = Some(st);
@@ -277,16 +334,46 @@ pub fn extract_to_text_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut 
 pub struct AltitudeToPolyState {
     block_name: String,
     alt_attr: String,
+    handles: Vec<cadcraft_doc::Handle>,
+    picking: bool,
+    last_result: Option<Result<String, String>>,
 }
 
 impl Default for AltitudeToPolyState {
     fn default() -> Self {
-        AltitudeToPolyState { block_name: "TCPOINT".into(), alt_attr: "ALT".into() }
+        AltitudeToPolyState { block_name: "TCPOINT".into(), alt_attr: "ALT".into(), handles: Vec::new(), picking: false, last_result: None }
     }
 }
 
 pub fn open_altitude_to_poly(app: &mut CadApp) {
     app.altitude_to_poly_dlg = Some(AltitudeToPolyState::default());
+    app.ui.dialog = Some("altitudetopoly".into());
+}
+
+fn start_pick_altitude_to_poly(app: &mut CadApp) {
+    let Some(st) = app.altitude_to_poly_dlg.as_mut() else { return };
+    st.picking = true;
+    app.session.table_pick = None;
+    app.ui.dialog = None;
+    app.start("data.pick_entities");
+}
+
+/// Every frame: once the DATA.PICK_ENTITIES this dialog started has ended, take its handles and
+/// bring the dialog back (unchanged when the pick was cancelled). Same pattern as
+/// [`crate::tabledlg::resume_assign`].
+pub fn resume_altitude_to_poly(app: &mut CadApp) {
+    if !app.altitude_to_poly_dlg.as_ref().is_some_and(|s| s.picking) {
+        return;
+    }
+    if app.session.running.is_some() {
+        return;
+    }
+    let picked = app.session.table_pick.take();
+    let Some(st) = app.altitude_to_poly_dlg.as_mut() else { return };
+    st.picking = false;
+    if let Some(hs) = picked {
+        st.handles = hs;
+    }
     app.ui.dialog = Some("altitudetopoly".into());
 }
 
@@ -296,8 +383,8 @@ pub fn altitude_to_poly_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut
         return;
     };
 
-    let (mut run, mut close) = (false, false);
-    egui::Window::new(crate::tl!("Altitude->poly")).open(open).resizable(false).collapsible(false).default_size(vec2(320.0, 160.0)).show(ctx, |ui| {
+    let (mut select, mut run, mut close) = (false, false, false);
+    egui::Window::new(crate::tl!("Altitude->poly")).open(open).resizable(false).collapsible(false).default_size(vec2(360.0, 230.0)).show(ctx, |ui| {
         egui::Grid::new("cc_alttopoly_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(crate::tl!("Block name"));
             ui.text_edit_singleline(&mut st.block_name);
@@ -307,9 +394,28 @@ pub fn altitude_to_poly_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut
             ui.text_edit_singleline(&mut st.alt_attr);
             ui.end_row();
         });
-        let ready = !st.block_name.trim().is_empty() && !st.alt_attr.trim().is_empty();
+        ui.separator();
+        ui.horizontal(|ui| {
+            select = ui.button(crate::tl!("Select objects")).clicked();
+            let count_label: String = if st.handles.is_empty() {
+                crate::tl!("No polyline/polygon selected yet.").to_string()
+            } else {
+                crate::tf!("{n} entity(ies) selected", n = st.handles.len())
+            };
+            ui.label(count_label);
+        });
+        let ready = !st.block_name.trim().is_empty() && !st.alt_attr.trim().is_empty() && !st.handles.is_empty();
         if !ready {
-            ui.colored_label(ui.visuals().error_fg_color, crate::tl!("Both fields are required."));
+            ui.colored_label(ui.visuals().error_fg_color, crate::tl!("Select at least one polyline/polygon, and fill the block name and attribute."));
+        }
+        match &st.last_result {
+            Some(Ok(msg)) => {
+                ui.colored_label(egui::Color32::from_rgb(0x2e, 0xa0, 0x4c), msg.clone());
+            }
+            Some(Err(msg)) => {
+                ui.colored_label(ui.visuals().error_fg_color, msg.clone());
+            }
+            None => {}
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -321,15 +427,24 @@ pub fn altitude_to_poly_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut
         *open = false;
     }
 
-    if run {
-        let r = app.run("data.altitude_to_poly", json!({ "blockName": st.block_name.trim(), "altAttr": st.alt_attr.trim() }));
-        app.session.echo(match &r {
-            Ok(v) => crate::tf!("{n} entity(ies) updated", n = v.get("changed").and_then(Value::as_u64).unwrap_or(0)),
-            Err(e) => e.clone(),
+    if select {
+        app.altitude_to_poly_dlg = Some(st.clone());
+        start_pick_altitude_to_poly(app);
+        return;
+    }
+
+    if run && !st.handles.is_empty() {
+        let handles: Vec<String> = st.handles.iter().map(|h| h.hex()).collect();
+        let r = app.run("data.altitude_to_poly", json!({ "blockName": st.block_name.trim(), "altAttr": st.alt_attr.trim(), "handles": handles }));
+        st.last_result = Some(match &r {
+            Ok(v) => Ok(crate::tf!("{n} entity(ies) updated", n = v.get("changed").and_then(Value::as_u64).unwrap_or(0))),
+            Err(e) => Err(e.clone()),
         });
-        if r.is_ok() {
-            *open = false;
-        }
+        app.session.echo(match &st.last_result {
+            Some(Ok(msg)) => msg.clone(),
+            Some(Err(msg)) => msg.clone(),
+            None => String::new(),
+        });
     }
     if *open {
         app.altitude_to_poly_dlg = Some(st);
@@ -350,6 +465,7 @@ pub struct AxeToEllipseState {
     threshold_text: String,
     size_threshold_text: String,
     delete_trigger: String,
+    last_result: Option<Result<String, String>>,
 }
 
 impl Default for AxeToEllipseState {
@@ -361,6 +477,7 @@ impl Default for AxeToEllipseState {
             threshold_text: "0.08".into(),
             size_threshold_text: "0.30".into(),
             delete_trigger: "PLAN".into(),
+            last_result: None,
         }
     }
 }
@@ -385,22 +502,12 @@ pub fn axe_to_ellipse_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut b
         return;
     };
     let tables_list = tables(app);
-    let table_names: Vec<String> = tables_list.iter().map(|(n, _)| n.clone()).collect();
 
     let (mut run, mut close) = (false, false);
     egui::Window::new(crate::tl!("Axe->Ellipse")).open(open).resizable(true).collapsible(false).default_size(vec2(360.0, 320.0)).show(ctx, |ui| {
         egui::Grid::new("cc_axetoellipse_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(crate::tl!("Source table"));
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut st.source_table);
-                egui::ComboBox::from_id_salt("cc_axe_src").selected_text("").show_ui(ui, |ui| {
-                    for n in &table_names {
-                        if ui.selectable_label(false, n).clicked() {
-                            st.source_table = n.clone();
-                        }
-                    }
-                });
-            });
+            editable_table_combo(ui, "cc_axe_src", &tables_list, &mut st.source_table);
             ui.end_row();
 
             ui.label(crate::tl!("Nature field"));
@@ -408,16 +515,7 @@ pub fn axe_to_ellipse_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut b
             ui.end_row();
 
             ui.label(crate::tl!("Destination table"));
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut st.dest_table);
-                egui::ComboBox::from_id_salt("cc_axe_dest").selected_text("").show_ui(ui, |ui| {
-                    for n in &table_names {
-                        if ui.selectable_label(false, n).clicked() {
-                            st.dest_table = n.clone();
-                        }
-                    }
-                });
-            });
+            editable_table_combo(ui, "cc_axe_dest", &tables_list, &mut st.dest_table);
             ui.end_row();
 
             ui.label(crate::tl!("Point-merge threshold (m)"));
@@ -434,6 +532,15 @@ pub fn axe_to_ellipse_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut b
         });
         if !axe_ready(&st) {
             ui.colored_label(ui.visuals().error_fg_color, crate::tl!("All fields are required, and both thresholds must be numbers."));
+        }
+        match &st.last_result {
+            Some(Ok(msg)) => {
+                ui.colored_label(egui::Color32::from_rgb(0x2e, 0xa0, 0x4c), msg.clone());
+            }
+            Some(Err(msg)) => {
+                ui.colored_label(ui.visuals().error_fg_color, msg.clone());
+            }
+            None => {}
         }
         ui.label(crate::tl!("Value remapping isn't available from this window yet - use the JSON `remap` parameter from a script if needed."));
         ui.separator();
@@ -458,18 +565,20 @@ pub fn axe_to_ellipse_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut b
             "deleteTrigger": st.delete_trigger.trim(),
         });
         let r = app.run("data.axe_to_ellipse", params);
-        app.session.echo(match &r {
-            Ok(v) => crate::tf!(
+        st.last_result = Some(match &r {
+            Ok(v) => Ok(crate::tf!(
                 "{created} ellipse(s) created, {deleted} deleted, {simplified} simplified",
                 created = v.get("created").and_then(Value::as_u64).unwrap_or(0),
                 deleted = v.get("deleted").and_then(Value::as_u64).unwrap_or(0),
                 simplified = v.get("simplified").and_then(Value::as_u64).unwrap_or(0)
-            ),
-            Err(e) => e.clone(),
+            )),
+            Err(e) => Err(e.clone()),
         });
-        if r.is_ok() {
-            *open = false;
-        }
+        app.session.echo(match &st.last_result {
+            Some(Ok(msg)) => msg.clone(),
+            Some(Err(msg)) => msg.clone(),
+            None => String::new(),
+        });
     }
     if *open {
         app.axe_to_ellipse_dlg = Some(st);

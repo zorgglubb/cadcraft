@@ -37,6 +37,7 @@ mod overkill;
 mod plan;
 mod pline_opts;
 pub mod plotters;
+mod points_to_tcpoint;
 mod props;
 pub use props::MatchProps;
 mod qselect;
@@ -231,6 +232,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(topo_split::specs());
         v.extend(terrain::specs());
         v.extend(plan::specs());
+        v.extend(points_to_tcpoint::specs());
         v.extend(fusionpoly::specs());
         v
     })

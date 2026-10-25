@@ -13,7 +13,7 @@
 //!   entity's bounding-box centre, stacking multiple lines vertically.
 
 use cadcraft_color::Color;
-use cadcraft_doc::{EntityKind, Handle};
+use cadcraft_doc::{AttributeField, AttributeFieldKind, AttributeTableDef, EntityKind, Handle};
 use cadcraft_geom::{Polyline, Vec2, Vec3};
 use serde_json::{Value, json};
 
@@ -28,11 +28,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(CodToNumM::default())))
             .params(
                 "{table: string, field: string, attr?: string (default \"COD\"), tolerance?: number (default 1e-6), \
-             handles?: [string] (default: current selection, must be polylines)} → {updated}. For each \
-             targeted polyline, finds every block insert whose insertion point touches it (within \
-             `tolerance`), reads that block's `attr` attribute, and writes the most frequent value into \
-             `field` of the polyline's `table` (an existing attribute table; the polyline is tagged with \
-             it if it didn't already carry one).",
+             createIfMissing?: boolean (default false), handles?: [string] (default: current selection, must be \
+             polylines)} → {updated}. For each targeted polyline, finds every block insert whose insertion point \
+             touches it (within `tolerance`), reads that block's `attr` attribute, and writes the most frequent \
+             value into `field` of the polyline's `table` (an existing attribute table, unless `createIfMissing` \
+             is true, in which case a new one-field Character table is created on the fly; the polyline is \
+             tagged with it if it didn't already carry one).",
             ),
         CommandSpec::new("data.extract_to_text", "Extraire donnée->texte", run_extract_to_text)
             .menu(&["Data", "Extraire donnée->texte"])
@@ -362,10 +363,16 @@ fn run_cod_to_num(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "nothing selected"));
     }
 
-    let d = s.doc()?;
-    if d.attribute_table(&table).is_none() {
-        return Err(bad(CMD, format!("no attribute table named `{table}`")));
+    let create_if_missing = bool_or(p, "createIfMissing", false);
+    if s.doc()?.attribute_table(&table).is_none() {
+        if !create_if_missing {
+            return Err(bad(CMD, format!("no attribute table named `{table}`")));
+        }
+        let def =
+            AttributeTableDef { name: table.clone(), fields: vec![AttributeField { name: field.clone(), kind: AttributeFieldKind::Character }] };
+        s.doc_mut()?.attribute_tables.push(def);
     }
+    let d = s.doc()?;
     let def = d.attribute_table(&table).cloned().unwrap_or_default();
     if !def.fields.is_empty() && !def.fields.iter().any(|f| f.name == field) {
         return Err(bad(CMD, format!("table `{table}` has no field `{field}`")));

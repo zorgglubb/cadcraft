@@ -47,6 +47,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "extracttotext" => crate::dataconvdlg::extract_to_text_dialog(app, ctx, &mut open),
         "altitudetopoly" => crate::dataconvdlg::altitude_to_poly_dialog(app, ctx, &mut open),
         "axetoellipse" => crate::dataconvdlg::axe_to_ellipse_dialog(app, ctx, &mut open),
+        "autonum" => crate::numberingdlg::dialog(app, ctx, &mut open),
+        "pointstotcpoint" => crate::pointstotcpointdlg::dialog(app, ctx, &mut open),
         "searchpoints" => crate::searchpointsdlg::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),

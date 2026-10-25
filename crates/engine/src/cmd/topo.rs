@@ -352,6 +352,13 @@ const TOPOALT_LAYER: &str = "TOPOALT";
 /// (bottom-right) attribute definitions, each on its own layer (created if missing) and each
 /// visible except ALT, whose value is also shown as the point's elevation via COD/MAT - kept
 /// anyway so it survives as real, editable entity data.
+/// Public alias of [`ensure_tcpoint_block`] for callers outside this module (e.g.
+/// `points_to_tcpoint.rs`) that just need the block definition to exist, without inserting a
+/// point themselves.
+pub(crate) fn insert_tcpoint_block_only(s: &mut Session, block: &str) -> Result<()> {
+    ensure_tcpoint_block(s, block)
+}
+
 fn ensure_tcpoint_block(s: &mut Session, block: &str) -> Result<()> {
     if s.doc()?.blocks.keys().any(|k| k.eq_ignore_ascii_case(block)) {
         return Ok(());
