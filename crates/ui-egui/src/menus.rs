@@ -378,6 +378,34 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::tabledlg::open_remove(app);
             Ok(Value::Null)
         }
+        // Typed, menu or toolbar (no parameters): these need a segment count, a table/field
+        // choice, or other configuration picked first, so they open a dialog instead of erring
+        // on a missing required parameter. A JSON call with real parameters still just runs the
+        // plain command as given - the dialogs act on the current selection the same way.
+        "convert.ellipse2pl" if params.is_null() && app.session.state().is_ok() => {
+            crate::convertdlg::open_ellipse2pl(app);
+            Ok(Value::Null)
+        }
+        "convert.spline2pl" if params.is_null() && app.session.state().is_ok() => {
+            crate::convertdlg::open_spline2pl(app);
+            Ok(Value::Null)
+        }
+        "data.cod_to_num" if params.is_null() && app.session.state().is_ok() => {
+            crate::dataconvdlg::open_cod_to_num(app);
+            Ok(Value::Null)
+        }
+        "data.extract_to_text" if params.is_null() && app.session.state().is_ok() => {
+            crate::dataconvdlg::open_extract_to_text(app);
+            Ok(Value::Null)
+        }
+        "data.altitude_to_poly" if params.is_null() && app.session.state().is_ok() => {
+            crate::dataconvdlg::open_altitude_to_poly(app);
+            Ok(Value::Null)
+        }
+        "data.axe_to_ellipse" if params.is_null() && app.session.state().is_ok() => {
+            crate::dataconvdlg::open_axe_to_ellipse(app);
+            Ok(Value::Null)
+        }
         "plan.image_show" if params.is_null() => {
             let r = app.run(id, json!({}));
             if let Ok(v) = &r

@@ -1625,3 +1625,34 @@
 	Point cod->num	Код точки->номер
 	Extraire donnée->texte	Дані->текст
 	Fusionner 2 polygones	Об'єднати 2 полігони
+	(choose)	(оберіть)
+	Add at least one table/field, a layer, and valid numbers.	Додайте щонайменше одну пару таблиця/поле, шар і коректні числа.
+	All fields are required, and both thresholds must be numbers.	Усі поля обов'язкові, обидва порогові значення мають бути числами.
+	Altitude attribute	Атрибут висоти
+	Block attribute	Атрибут блока
+	Block name	Назва блока
+	Both fields are required.	Обидва поля обов'язкові.
+	Colour (ACI)	Колір (ACI)
+	Delete when Nature =	Видаляти, якщо Nature =
+	Destination table	Таблиця призначення
+	Enter a whole number of 3 or more.	Введіть ціле число 3 або більше.
+	Fields to extract	Поля для вилучення
+	Nature field	Поле Nature
+	No attribute table yet - create one first (Data > Attribute Table...).	Ще немає таблиці атрибутів - спершу створіть її (Дані > Таблиця атрибутів...).
+	Point-merge threshold (m)	Поріг злиття точок (м)
+	Run	Виконати
+	Segments	Сегменти
+	Segments (full ellipse)	Сегменти (повний еліпс)
+	Small-ellipse threshold (m)	Поріг малого еліпса (м)
+	Source table	Вихідна таблиця
+	Tolerance	Допуск
+	Tolerance must be a number.	Допуск має бути числом.
+	Value remapping isn't available from this window yet - use the JSON `remap` parameter from a script if needed.	Переприв'язка значень у цьому вікні ще недоступна - за потреби використайте параметр JSON `remap` зі скрипту.
+	X offset	Зміщення X
+	Y offset	Зміщення Y
+	{created} ellipse(s) created, {deleted} deleted, {simplified} simplified	{created} еліпс(ів) створено, {deleted} видалено, {simplified} спрощено
+	{n} ellipse(s) converted	{n} еліпс(ів) перетворено
+	{n} entity(ies) updated	{n} об'єкт(ів) оновлено
+	{n} polyline(s) updated	{n} полілінію(ій) оновлено
+	{n} spline(s) converted	{n} сплайн(ів) перетворено
+	{n} text(s) created	{n} текст(ів) створено

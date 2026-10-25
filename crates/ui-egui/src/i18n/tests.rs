@@ -106,6 +106,8 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         include_str!("../createcontoursdlg.rs"),
         include_str!("../dimensioncontoursdlg.rs"),
         include_str!("../renumberpointsdlg.rs"),
+        include_str!("../convertdlg.rs"),
+        include_str!("../dataconvdlg.rs"),
         include_str!("../palettes/quickcalc.rs"),
         include_str!("../palettes/patterns.rs"),
         include_str!("../palettes/topo.rs"),

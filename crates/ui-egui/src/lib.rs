@@ -20,10 +20,12 @@ pub mod closing;
 pub mod cmdline;
 pub mod context_menu;
 pub mod control;
+pub mod convertdlg;
 pub mod createcontoursdlg;
 pub mod createmntdlg;
 pub mod credits;
 pub mod crsdlg;
+pub mod dataconvdlg;
 pub mod dialogs;
 pub mod dimensioncontoursdlg;
 pub mod docking;
@@ -319,6 +321,18 @@ pub struct CadApp {
     pub dimension_contours_dlg: Option<dimensioncontoursdlg::State>,
     /// The Renumber Points... dialog while open ([`renumberpointsdlg`]).
     pub renumber_points_dlg: Option<renumberpointsdlg::State>,
+    /// The Ellipse to Polyline dialog while open ([`convertdlg`]).
+    pub ellipse2pl_dlg: Option<convertdlg::EllipseToPolyState>,
+    /// The Spline to Polyline dialog while open ([`convertdlg`]).
+    pub spline2pl_dlg: Option<convertdlg::SplineToPolyState>,
+    /// The Point cod->num dialog while open ([`dataconvdlg`]).
+    pub cod_to_num_dlg: Option<dataconvdlg::CodToNumState>,
+    /// The Extraire donnée->texte dialog while open ([`dataconvdlg`]).
+    pub extract_to_text_dlg: Option<dataconvdlg::ExtractToTextState>,
+    /// The Altitude->poly dialog while open ([`dataconvdlg`]).
+    pub altitude_to_poly_dlg: Option<dataconvdlg::AltitudeToPolyState>,
+    /// The Axe->Ellipse dialog while open ([`dataconvdlg`]).
+    pub axe_to_ellipse_dlg: Option<dataconvdlg::AxeToEllipseState>,
 }
 
 impl CadApp {
@@ -373,6 +387,12 @@ impl CadApp {
             create_contours_dlg: None,
             dimension_contours_dlg: None,
             renumber_points_dlg: None,
+            ellipse2pl_dlg: None,
+            spline2pl_dlg: None,
+            cod_to_num_dlg: None,
+            extract_to_text_dlg: None,
+            altitude_to_poly_dlg: None,
+            axe_to_ellipse_dlg: None,
         }
     }
 

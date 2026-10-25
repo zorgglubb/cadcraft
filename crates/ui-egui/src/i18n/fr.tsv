@@ -1301,3 +1301,34 @@
 	Click a pixel on the image to use its colour	Cliquez sur un pixel de l'image pour en reprendre la couleur
 	Click inside the image to pick its colour.	Cliquez à l'intérieur de l'image pour en reprendre la couleur.
 	Auto numbering	Numérotation automatique
+	(choose)	(choisir)
+	Add at least one table/field, a layer, and valid numbers.	Ajoutez au moins une paire table/champ, un calque et des nombres valides.
+	All fields are required, and both thresholds must be numbers.	Tous les champs sont obligatoires, et les deux seuils doivent être des nombres.
+	Altitude attribute	Attribut d'altitude
+	Block attribute	Attribut du bloc
+	Block name	Nom du bloc
+	Both fields are required.	Les deux champs sont obligatoires.
+	Colour (ACI)	Couleur (ACI)
+	Delete when Nature =	Supprimer si Nature =
+	Destination table	Table de destination
+	Enter a whole number of 3 or more.	Entrez un nombre entier de 3 ou plus.
+	Fields to extract	Champs à extraire
+	Nature field	Champ Nature
+	No attribute table yet - create one first (Data > Attribute Table...).	Aucune table d'attributs pour l'instant - créez-en une d'abord (Données > Table d'attributs...).
+	Point-merge threshold (m)	Seuil de fusion des points (m)
+	Run	Exécuter
+	Segments	Segments
+	Segments (full ellipse)	Segments (ellipse complète)
+	Small-ellipse threshold (m)	Seuil petite ellipse (m)
+	Source table	Table source
+	Tolerance	Tolérance
+	Tolerance must be a number.	La tolérance doit être un nombre.
+	Value remapping isn't available from this window yet - use the JSON `remap` parameter from a script if needed.	Le remappage des valeurs n'est pas encore possible depuis cette fenêtre - utilisez le paramètre JSON `remap` via un script si besoin.
+	X offset	Décalage X
+	Y offset	Décalage Y
+	{created} ellipse(s) created, {deleted} deleted, {simplified} simplified	{created} ellipse(s) créée(s), {deleted} supprimée(s), {simplified} simplifiée(s)
+	{n} ellipse(s) converted	{n} ellipse(s) convertie(s)
+	{n} entity(ies) updated	{n} objet(s) mis à jour
+	{n} polyline(s) updated	{n} polyligne(s) mise(s) à jour
+	{n} spline(s) converted	{n} spline(s) convertie(s)
+	{n} text(s) created	{n} texte(s) créé(s)
