@@ -1,8 +1,9 @@
 //! `data.points_to_tcpoint` ("Point->TCPOINT"): converts each selected POINT entity into a
 //! CADCRAFT_TCPOINT block insert, filling COD/ALT/MAT from fields the point already carries in
-//! one of its attribute tables (the same `ATTR_TABLE_APPID`/`import_attrs` mechanism used
-//! throughout `data_convert.rs`/`donnees_conv.rs`), and copying that table's XDATA onto the new
-//! insert so it stays findable by DATA.SEARCH and friends. The source POINT is deleted.
+//! one of its attribute tables - a user-defined table, a Shapefile import, or a DWG's recovered
+//! Map 3D "Object Data" (whichever `data::entity_table` finds, same lookup DATA.SEARCH itself
+//! uses), and copying that table's XDATA onto the new insert so it stays findable by DATA.SEARCH
+//! and friends. The source POINT is deleted.
 
 use cadcraft_doc::{EntityKind, Handle};
 use serde_json::{Value, json};
@@ -10,10 +11,6 @@ use serde_json::{Value, json};
 use super::topo::{TCPOINT_BLOCK, insert_tcpoint_block_only};
 use super::*;
 use crate::{Result, Session};
-
-fn attribute_table_appid() -> &'static str {
-    super::data::ATTR_TABLE_APPID
-}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("data.points_to_tcpoint", "Point->TCPOINT", run_points_to_tcpoint).menu(&["Data", "Point->TCPOINT"]).params(
@@ -52,7 +49,7 @@ fn run_points_to_tcpoint(s: &mut Session, p: &Value) -> Result<Value> {
         for h in &hs {
             let Some(e) = d.entity(*h) else { continue };
             let EntityKind::Point(pt) = &e.kind else { continue };
-            let Some((_, fields)) = cadcraft_doc::import_attrs::fields(e, attribute_table_appid()) else { continue };
+            let Some((_, fields)) = super::data::entity_table(e) else { continue };
             let get =
                 |key: &Option<String>| key.as_deref().and_then(|k| fields.iter().find(|(n, _)| n.eq_ignore_ascii_case(k))).map(|(_, v)| v.clone());
             pending.push(Pending {

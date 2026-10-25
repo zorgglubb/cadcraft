@@ -155,7 +155,7 @@ const MAX_ENTITIES_SCANNED: usize = 200_000;
 /// user-defined attribute table ([`ATTR_TABLE_APPID`]), a Shapefile import
 /// (`cadcraft_doc::import_attrs::SHP_APPID`, from `plan.import_shp`), or a DWG's recovered
 /// Autodesk Map 3D "Object Data" (`cadcraft_doc::import_attrs::DWG_MAP_APPID`).
-fn entity_table(e: &cadcraft_doc::Entity) -> Option<(String, Vec<(String, String)>)> {
+pub(crate) fn entity_table(e: &cadcraft_doc::Entity) -> Option<(String, Vec<(String, String)>)> {
     cadcraft_doc::import_attrs::fields(e, ATTR_TABLE_APPID)
         .or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::SHP_APPID))
         .or_else(|| cadcraft_doc::import_attrs::fields(e, cadcraft_doc::import_attrs::DWG_MAP_APPID))

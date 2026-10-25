@@ -387,14 +387,14 @@ fn ensure_tcpoint_block(s: &mut Session, block: &str) -> Result<()> {
     draw(s, "circle", json!({ "center": [0.0, 0.0], "radius": 0.2 }), None)?;
     draw(s, "line", json!({ "points": [[-0.3, 0.0], [0.3, 0.0]] }), None)?;
     draw(s, "line", json!({ "points": [[0.0, -0.3], [0.0, 0.3]] }), None)?;
-    draw(s, "attdef", json!({ "tag": "MAT", "prompt": "Matricule", "default": "", "at": [-0.4, 0.3], "height": 0.15 }), Some(TOPOMAT_LAYER))?;
+    draw(s, "attdef", json!({ "tag": "COD", "prompt": "Code", "default": "", "at": [-0.4, 0.3], "height": 0.15 }), Some(TOPOCOD_LAYER))?;
     // Right-justified: the anchor at `at` stays put, and the text body is laid out to its left,
-    // so COD reads toward the point instead of away from it like MAT/ALT.
+    // so MAT reads toward the point instead of away from it like COD/ALT.
     draw(
         s,
         "attdef",
-        json!({ "tag": "COD", "prompt": "Code", "default": "", "at": [0.4, 0.3], "height": 0.15, "justify": "R" }),
-        Some(TOPOCOD_LAYER),
+        json!({ "tag": "MAT", "prompt": "Matricule", "default": "", "at": [0.4, 0.3], "height": 0.15, "justify": "R" }),
+        Some(TOPOMAT_LAYER),
     )?;
     draw(s, "attdef", json!({ "tag": "ALT", "prompt": "Altitude", "default": "", "at": [0.4, -0.3], "height": 0.15 }), Some(TOPOALT_LAYER))?;
     s.execute("block", &json!({ "name": block, "base": [0.0, 0.0], "handles": handles, "keep": "delete" }))?;
