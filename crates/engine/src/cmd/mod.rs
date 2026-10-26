@@ -6,6 +6,7 @@ mod annotate;
 mod array;
 mod audit;
 pub(crate) mod blocks;
+mod cadastre;
 pub mod clipboard;
 pub mod constraints;
 mod convert;
@@ -199,6 +200,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(hatch::specs());
         v.extend(overkill::specs());
         v.extend(blocks::specs());
+        v.extend(cadastre::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
         v.extend(array::specs());

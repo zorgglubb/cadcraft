@@ -28,3 +28,13 @@ log = { workspace = true }
 rstar = { version = "0.12", default-features = false }
 
 [dev-dependencies]
+
+# Cadastre DXF download (PLAN.IMPORT_CADASTRE_DXF): native builds only - wasm32 has no socket
+# access, so the command reports "not available" there instead of pulling these in.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Sync HTTP client, no async runtime (MIT OR Apache-2.0).
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# Tar archive reader (MIT OR Apache-2.0).
+tar = "0.4"
+# Pure-Rust bzip2 decoder - no C toolchain/libbz2 build dependency (MIT).
+bzip2-rs = "0.1"
