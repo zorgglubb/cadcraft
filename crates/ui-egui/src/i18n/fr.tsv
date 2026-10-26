@@ -1356,3 +1356,13 @@
 	Select at least one point, and fill the block name.	Sélectionnez au moins un point, et remplissez le nom du bloc.
 	Each selected point keeps its own attribute-table data; a point with no attribute table is skipped.	Chaque point sélectionné garde ses propres données de table ; un point sans table est ignoré.
 	{created} TCPOINT(s) created, {skipped} skipped	{created} TCPOINT créé(s), {skipped} ignoré(s)
+	Importer cadastre DXF	Importer cadastre DXF
+	Code INSEE (commune)	Code INSEE (commune)
+	Sections	Sections
+	Sections : laisser vide pour toutes les sections de la commune.	Sections : laisser vide pour toutes les sections de la commune.
+	Entrez un code INSEE d'au moins 5 caractères.	Entrez un code INSEE d'au moins 5 caractères.
+	Téléchargement en cours…	Téléchargement en cours…
+	Importer	Importer
+	Fermer	Fermer
+	{n} feuille(s) importée(s).	{n} feuille(s) importée(s).
+	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.

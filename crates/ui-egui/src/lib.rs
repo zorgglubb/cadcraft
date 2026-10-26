@@ -11,6 +11,7 @@
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
+pub mod cadastredlg;
 pub mod canvas;
 pub mod carroyagedlg;
 pub mod cheminementdlg;
@@ -324,6 +325,8 @@ pub struct CadApp {
     /// The Renumber Points... dialog while open ([`renumberpointsdlg`]).
     pub renumber_points_dlg: Option<renumberpointsdlg::State>,
     /// The Ellipse to Polyline dialog while open ([`convertdlg`]).
+    /// The Importer cadastre DXF dialog while open ([`cadastredlg`]).
+    pub cadastre_dlg: Option<cadastredlg::State>,
     pub ellipse2pl_dlg: Option<convertdlg::EllipseToPolyState>,
     /// The Spline to Polyline dialog while open ([`convertdlg`]).
     pub spline2pl_dlg: Option<convertdlg::SplineToPolyState>,
@@ -393,6 +396,7 @@ impl CadApp {
             create_contours_dlg: None,
             dimension_contours_dlg: None,
             renumber_points_dlg: None,
+            cadastre_dlg: None,
             ellipse2pl_dlg: None,
             spline2pl_dlg: None,
             cod_to_num_dlg: None,

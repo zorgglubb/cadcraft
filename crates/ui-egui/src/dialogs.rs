@@ -41,6 +41,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "createcontours" => crate::createcontoursdlg::dialog(app, ctx, &mut open),
         "dimensioncontours" => crate::dimensioncontoursdlg::dialog(app, ctx, &mut open),
         "renumberpoints" => crate::renumberpointsdlg::dialog(app, ctx, &mut open),
+        "cadastre" => crate::cadastredlg::dialog(app, ctx, &mut open),
         "ellipse2pl" => crate::convertdlg::ellipse2pl_dialog(app, ctx, &mut open),
         "spline2pl" => crate::convertdlg::spline2pl_dialog(app, ctx, &mut open),
         "codtonum" => crate::dataconvdlg::cod_to_num_dialog(app, ctx, &mut open),

@@ -1681,3 +1681,13 @@
 	Select at least one point, and fill the block name.	Виберіть хоча б одну точку і заповніть назву блока.
 	Each selected point keeps its own attribute-table data; a point with no attribute table is skipped.	Кожна вибрана точка зберігає власні дані таблиці атрибутів; точка без таблиці атрибутів пропускається.
 	{created} TCPOINT(s) created, {skipped} skipped	Створено TCPOINT: {created}, пропущено: {skipped}
+	Importer cadastre DXF	Імпортувати кадастр DXF
+	Code INSEE (commune)	Код INSEE (громада)
+	Sections	Секції
+	Sections : laisser vide pour toutes les sections de la commune.	Секції: залиште порожнім для всіх секцій громади.
+	Entrez un code INSEE d'au moins 5 caractères.	Введіть код INSEE щонайменше з 5 символів.
+	Téléchargement en cours…	Завантаження…
+	Importer	Імпортувати
+	Fermer	Закрити
+	{n} feuille(s) importée(s).	Імпортовано аркушів: {n}.
+	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.	Імпортовано аркушів: {n}, помилок: {e} - див. командний рядок.

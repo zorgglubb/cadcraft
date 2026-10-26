@@ -382,6 +382,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // choice, or other configuration picked first, so they open a dialog instead of erring
         // on a missing required parameter. A JSON call with real parameters still just runs the
         // plain command as given - the dialogs act on the current selection the same way.
+        "plan.import_cadastre_dxf" if params.is_null() && app.session.state().is_ok() => {
+            crate::cadastredlg::open(app);
+            Ok(Value::Null)
+        }
         "convert.ellipse2pl" if params.is_null() && app.session.state().is_ok() => {
             crate::convertdlg::open_ellipse2pl(app);
             Ok(Value::Null)
