@@ -1691,3 +1691,13 @@
 	Fermer	Закрити
 	{n} feuille(s) importée(s).	Імпортовано аркушів: {n}.
 	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.	Імпортовано аркушів: {n}, помилок: {e} - див. командний рядок.
+	Purge Unused Layers	Очистити невикористані шари
+	Delete Layers...	Видалити шари...
+	Supprimer calques	Видалити шари
+	Aucun calque supprimable (hors calque 0, Defpoints, le calque courant et les calques de référence externe).	Немає шарів для видалення (крім шару 0, Defpoints, поточного шару та шарів зовнішніх посилань).
+	Tout cocher	Позначити все
+	Tout décocher	Зняти позначки
+	Suppression en cours…	Видалення…
+	Supprimer	Видалити
+	1 calque supprimé.	Видалено 1 шар.
+	{n} calques supprimés.	Видалено шарів: {n}.

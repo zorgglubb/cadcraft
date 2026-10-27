@@ -27,6 +27,7 @@ pub mod createmntdlg;
 pub mod credits;
 pub mod crsdlg;
 pub mod dataconvdlg;
+pub mod deletelayersdlg;
 pub mod dialogs;
 pub mod dimensioncontoursdlg;
 pub mod docking;
@@ -327,6 +328,8 @@ pub struct CadApp {
     /// The Ellipse to Polyline dialog while open ([`convertdlg`]).
     /// The Importer cadastre DXF dialog while open ([`cadastredlg`]).
     pub cadastre_dlg: Option<cadastredlg::State>,
+    /// The Supprimer calques dialog while open ([`deletelayersdlg`]).
+    pub delete_layers_dlg: Option<deletelayersdlg::State>,
     pub ellipse2pl_dlg: Option<convertdlg::EllipseToPolyState>,
     /// The Spline to Polyline dialog while open ([`convertdlg`]).
     pub spline2pl_dlg: Option<convertdlg::SplineToPolyState>,
@@ -397,6 +400,7 @@ impl CadApp {
             dimension_contours_dlg: None,
             renumber_points_dlg: None,
             cadastre_dlg: None,
+            delete_layers_dlg: None,
             ellipse2pl_dlg: None,
             spline2pl_dlg: None,
             cod_to_num_dlg: None,

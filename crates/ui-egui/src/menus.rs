@@ -386,6 +386,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::cadastredlg::open(app);
             Ok(Value::Null)
         }
+        "layer.delete_many" if params.is_null() && app.session.state().is_ok() => {
+            crate::deletelayersdlg::open(app);
+            Ok(Value::Null)
+        }
         "convert.ellipse2pl" if params.is_null() && app.session.state().is_ok() => {
             crate::convertdlg::open_ellipse2pl(app);
             Ok(Value::Null)

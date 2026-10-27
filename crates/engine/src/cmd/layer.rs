@@ -65,6 +65,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Format", "Layer Tools", "Layer Delete"])
             .params("{names: [...]} (deletes the layers and every object on them)")
             .interactive(|_| Ok(Box::new(merge::LayerRemove::delete()))),
+        // Edit ▸ Delete Layers...: the same action as LAYDEL, under its own id so the menu can
+        // open a checklist dialog here (every deletable layer, ticked ones removed on confirm)
+        // instead of LAYDEL's own canvas-pick/type-a-name prompt sequence.
+        CommandSpec::new("layer.delete_many", "Delete Layers...", merge::run_laydel)
+            .menu(&["Edit", "Delete Layers..."])
+            .params("{names: [...]} (deletes the layers and every object on them; same as `laydel`)"),
     ]
 }
 

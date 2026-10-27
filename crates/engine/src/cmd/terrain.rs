@@ -33,14 +33,13 @@ const DEFAULT_CONTOUR_LABEL_LAYER: &str = "COTES_COURBES";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("terrain.triangulate", "Triangulate (TIN)", run_triangulate)
-            .menu(&["Topo 3D", "Triangulate (TIN)"])
-            .params("{points: [[x,y,z], ...], draw?: bool}"),
-        CommandSpec::new("terrain.elevation_at", "Elevation At Point", run_elevation_at)
-            .menu(&["Topo 3D", "Elevation At Point"])
-            .params("{points: [[x,y,z], ...], x: number, y: number}"),
+        // No `.menu()`: these three are the low-level, stateless building blocks (the caller
+        // assembles `points` by hand) that `terrain.create_mnt`/`terrain.create_contours` wrap
+        // for menu use with a real point-gathering wizard; kept for scripts/MCP, just not
+        // duplicated in the Topo 3D menu alongside the commands people actually want there.
+        CommandSpec::new("terrain.triangulate", "Triangulate (TIN)", run_triangulate).params("{points: [[x,y,z], ...], draw?: bool}"),
+        CommandSpec::new("terrain.elevation_at", "Elevation At Point", run_elevation_at).params("{points: [[x,y,z], ...], x: number, y: number}"),
         CommandSpec::new("terrain.contours", "Contour Lines", run_contours)
-            .menu(&["Topo 3D", "Contour Lines"])
             .alias(&["courbes"])
             .params("{points: [[x,y,z], ...], interval: number, draw?: bool}"),
         CommandSpec::new("terrain.create_mnt", "Create MNT...", run_create_mnt).menu(&["Topo 3D", "Create MNT..."]).params(

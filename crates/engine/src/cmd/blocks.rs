@@ -69,6 +69,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["pu", "-purge"])
             .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
             .interactive(|_| Ok(Box::new(purge::PurgeM::default()))),
+        // Edit ▸ Purge Unused Layers: a one-click shortcut for `purge {type: "layers"}` - every
+        // layer with no entities anywhere (model space, layouts, block definitions) and not
+        // otherwise protected (0, Defpoints, the current layer, xref layers).
+        CommandSpec::new("purge.layers", "Purge Unused Layers", run_purge_layers)
+            .menu(&["Edit", "Purge Unused Layers"])
+            .params("{} → purged (same shape as `purge`'s result, scoped to layers)"),
         CommandSpec::new("blocks.list", "List Blocks", run_list).enabled(has_doc).noundo(),
         battman::battman_spec(),
         attribs::attdisp_spec(),
@@ -356,6 +362,10 @@ fn run_base(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("base", p, "at")?;
     s.doc_mut()?.header.set("INSBASE", cadcraft_doc::HVal::Point(v3(at)));
     ok()
+}
+
+fn run_purge_layers(s: &mut Session, _p: &Value) -> Result<Value> {
+    purge::run(s, &json!({ "type": "layers" }))
 }
 
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {

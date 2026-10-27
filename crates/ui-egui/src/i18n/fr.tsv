@@ -1366,3 +1366,13 @@
 	Fermer	Fermer
 	{n} feuille(s) importée(s).	{n} feuille(s) importée(s).
 	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.	{n} feuille(s) importée(s), {e} erreur(s) - voir la ligne de commande.
+	Purge Unused Layers	Purger les calques inutilisés
+	Delete Layers...	Supprimer calques...
+	Supprimer calques	Supprimer calques
+	Aucun calque supprimable (hors calque 0, Defpoints, le calque courant et les calques de référence externe).	Aucun calque supprimable (hors calque 0, Defpoints, le calque courant et les calques de référence externe).
+	Tout cocher	Tout cocher
+	Tout décocher	Tout décocher
+	Suppression en cours…	Suppression en cours…
+	Supprimer	Supprimer
+	1 calque supprimé.	1 calque supprimé.
+	{n} calques supprimés.	{n} calques supprimés.
