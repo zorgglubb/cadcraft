@@ -177,16 +177,25 @@ struct Table {
 
 /// Parses an `IRD_DSC_RECORD`'s decoded text runs into a [`Table`], when they look like a real
 /// feature table rather than one of the built-in type-descriptor records (`Class`, `ClassChar`,
-/// …) that describe the type system itself. A real table's runs start with its name, then the
-/// literal marker `ade`, then `name, type, "Ird"` triples for each field.
+/// …) that describe the type system itself. A real table's runs hold its name immediately before
+/// the literal marker `ade`, then `name, type, "Ird"` triples for each field.
+///
+/// The name isn't assumed to be the very first run: some records carry a short (3-character,
+/// seen as e.g. `"C'R"`/`"C)R"`) run ahead of it that this encoding happens to decode from a few
+/// binary header bytes this format doesn't otherwise represent - real sample seen: a record whose
+/// runs were `["C'R", "D162949_emprise", "ade", …]`, where the table name is `"D162949_emprise"`,
+/// not `"C'R"`. Anchoring on `ade` instead of on position 0 reads both layouts the same way.
 fn parse_table(runs: &[String]) -> Option<Table> {
-    let name = runs.first()?.clone();
-    if runs.get(1).map(String::as_str) != Some("ade") {
-        return None;
-    }
+    let ade_idx = runs.iter().position(|r| r == "ade")?;
+    let name = (ade_idx > 0).then(|| runs[ade_idx - 1].clone())?;
     // `ade` is followed by a `Class`/`Ird` pair naming the table's own base class, before the
     // field list starts.
-    let mut i = if runs.get(2).map(String::as_str) == Some("Class") && runs.get(3).map(String::as_str) == Some("Ird") { 4 } else { 2 };
+    let after_ade = ade_idx + 1;
+    let mut i = if runs.get(after_ade).map(String::as_str) == Some("Class") && runs.get(after_ade + 1).map(String::as_str) == Some("Ird") {
+        after_ade + 2
+    } else {
+        after_ade
+    };
     let mut fields = Vec::new();
     // Bounded by the record's own run count; a real schema has a handful of fields.
     while i + 1 < runs.len() {
@@ -498,6 +507,42 @@ mod tests {
 
         let descriptor_runs = vec!["Class".to_string(), "Ird".to_string(), "Class".to_string(), "The base superclass".to_string()];
         assert!(parse_table(&descriptor_runs).is_none());
+    }
+
+    #[test]
+    fn parse_table_skips_a_leading_noise_run_before_the_name() {
+        // Real sample ("D162949_Barfleur_blanvillain.dwg"): a short (3-character) run this
+        // encoding decodes from binary header bytes it doesn't otherwise represent, ahead of the
+        // table's real name - every real table in that file had this, and the previous
+        // position-0 assumption rejected every single one of them (no polyline/polygon Object
+        // Data ever showed for it). The exact runs seen for its "Structure" table:
+        let table_runs = [
+            "C+r",
+            "Structure",
+            "ade",
+            "Class",
+            "Ird",
+            "FeatId",
+            "ClassLong",
+            "Ird",
+            "Num",
+            "ClassChar",
+            "Ird",
+            "Nature",
+            "ClassChar",
+            "Ird",
+            "Datation",
+            "ClassChar",
+            "Ird",
+            "$=L?P?H?T",
+            "P?T?H",
+            "4|4",
+        ]
+        .map(String::from);
+        let t = parse_table(&table_runs).expect("should parse as a table despite the leading noise run");
+        assert_eq!(t.name, "Structure");
+        let names: Vec<&str> = t.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["FeatId", "Num", "Nature", "Datation"]);
     }
 
     #[test]
