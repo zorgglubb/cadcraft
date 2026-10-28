@@ -36,6 +36,16 @@ pub type MapAttributes = HashMap<u64, (String, Vec<(String, String)>)>;
 
 /// A text run is kept only from this length up, to cut down on short false positives from
 /// unrelated binary bytes that happen to decode to a printable character.
+///
+/// Tried lowering this to 2 for an `IRD_OBJ_RECORD`'s own values only (short codes like "FO" are
+/// common there), on the theory that [`looks_like_a_word`] plus the schema-marker exclusion would
+/// filter out binary noise well enough. Checked against a real file instead of assuming so: it
+/// didn't - two-byte runs like `" b"`/`" d"`/`" n"` (a space plus one consonant) turned up
+/// constantly, decoded from what's almost certainly a fixed binary header immediately before each
+/// record's real text, and - worse than showing nothing - these fake short "values" sometimes
+/// happened to bring a record's value count to exactly match its schema's field count, so the
+/// code below confidently labelled a wrong value with a real field name instead of falling back to
+/// an honest `Attribut N`. Reverted; stays at 3 for both schema and values.
 const MIN_RUN_LEN: usize = 3;
 
 /// Most bytes worth scanning in one record; real records are well under this, and it bounds the
